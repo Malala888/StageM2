@@ -1,9 +1,109 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLoaderData, useRouteError } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
+// Petit cache en mémoire : si les données ont été préchargées au survol
+// du lien (voir prefetchServiceDashboard), le loader les réutilise au
+// lieu de refaire les appels — navigation quasi instantanée.
+let dashboardCache = null;
+let dashboardCacheTime = 0;
+const CACHE_TTL_MS = 15000; // 15s : au-delà, on considère les données périmées
+
+async function fetchDashboardData() {
+  const now = Date.now();
+  if (dashboardCache && now - dashboardCacheTime < CACHE_TTL_MS) {
+    return dashboardCache;
+  }
+
+  // Les 4 appels ne dépendent pas les uns des autres : on les lance
+  // en parallèle plutôt que d'attendre chacun l'un après l'autre.
+  const [
+    { data: userData },
+    { data: users },
+    { data: stockData },
+    { data: mouvements },
+  ] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/accounts/users/'),
+    api.get('/materiaux/stock/'),
+    api.get('/materiaux/mouvements/'),
+  ]);
+
+  const actifs = users.filter(u => u.statut === 'ACTIF');
+  const enAttente = users.filter(u => u.statut === 'EN_ATTENTE');
+  const totalStock = stockData.reduce((acc, item) => acc + item.quantite, 0);
+  const derniers = mouvements.slice(0, 5); // les 5 derniers
+  const enCours = mouvements.filter(m => m.statut === 'EN_COURS');
+  const retards = mouvements.filter(m => m.statut === 'EN_RETARD');
+
+  const activitesList = derniers.map((m, index) => ({
+    id: m.id || index,
+    type: m.type,
+    materiel: m.materiel ? m.materiel.nom : 'Matériel',
+    agent: m.agent_concerner ? `${m.agent_concerner.nom} ${m.agent_concerner.prenom}` : 'Système',
+    date: new Date(m.date_mouvement).toLocaleDateString('fr-FR'),
+    statut: m.statut,
+  }));
+
+  const result = {
+    user: userData,
+    stats: {
+      utilisateursActifs: actifs.length,
+      totalUtilisateurs: users.length,
+      stockTotal: totalStock,
+      empruntsEnCours: enCours.length,
+      retards: retards.length,
+    },
+    derniersMouvements: derniers,
+    activites: activitesList,
+    comptesEnAttente: enAttente,
+  };
+
+  dashboardCache = result;
+  dashboardCacheTime = now;
+  return result;
+}
+
+// Appelé par React Router juste avant d'afficher la page.
+export async function serviceDashboardLoader() {
+  return fetchDashboardData();
+}
+
+// À appeler au survol du lien vers /dashboard (onMouseEnter) pour lancer
+// le chargement en avance. Si l'utilisateur clique ensuite, le loader
+// trouvera les données déjà en cache : navigation quasi instantanée.
+export function prefetchServiceDashboard() {
+  fetchDashboardData().catch(() => {
+    // on ignore les erreurs ici : si le préchargement échoue, le loader
+    // réessaiera normalement au clic et affichera l'écran d'erreur si besoin
+  });
+}
+
+// Affiché automatiquement par React Router si le loader plante (ex: API down)
+export function ServiceDashboardError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement du tableau de bord:', error);
+  return (
+    <div className="dashboard-body">
+      <div className="app">
+        <Sidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}>
+          <div style={{ color: 'red', textAlign: 'center' }}>
+            <h2>Erreur</h2>
+            <p>Impossible de charger les données. Veuillez réessayer.</p>
+            <button onClick={() => window.location.reload()} className="btn-sm primary">Réessayer</button>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
 const ServiceDashboard = () => {
+  const { user, stats, derniersMouvements, activites, comptesEnAttente } = useLoaderData();
+
   return (
     <>
       <style>{`
@@ -417,12 +517,12 @@ const ServiceDashboard = () => {
             <div className="page-header">
               <div>
                 <h1>Tableau de bord</h1>
-                <div className="sub">Bienvenue, Chef de Service — vue globale du système</div>
+                <div className="sub">Bienvenue, {user?.nom || 'Admin'} {user?.prenom || ''} — vue globale du système</div>
               </div>
               <div className="user-badge">
-                <div className="avatar">AD</div>
+                <div className="avatar">{user?.nom ? user.nom[0] : 'AD'}</div>
                 <div>
-                  <div className="name">Admin</div>
+                  <div className="name">{user?.nom || 'Admin'}</div>
                   <div className="role">Chef Service</div>
                 </div>
               </div>
@@ -435,32 +535,32 @@ const ServiceDashboard = () => {
                   <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                 </div>
                 <div className="label">Utilisateurs actifs</div>
-                <div className="value">48 <small>/ 52</small></div>
-                <span className="change">+4 ce mois</span>
+                <div className="value">{stats.utilisateursActifs} <small>/ {stats.totalUtilisateurs}</small></div>
+                <span className="change">+{stats.utilisateursActifs} actifs</span>
               </div>
               <div className="widget">
                 <div className="icon">
                   <svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
                 </div>
                 <div className="label">Matériels en stock</div>
-                <div className="value">1 243</div>
-                <span className="change">+12 ce mois</span>
+                <div className="value">{stats.stockTotal}</div>
+                <span className="change">Total unités</span>
               </div>
               <div className="widget">
                 <div className="icon">
                   <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                 </div>
                 <div className="label">En cours d'emprunt</div>
-                <div className="value">37</div>
-                <span className="change down">+3 depuis hier</span>
+                <div className="value">{stats.empruntsEnCours}</div>
+                <span className="change down">En cours</span>
               </div>
               <div className="widget">
                 <div className="icon">
                   <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                 </div>
                 <div className="label">Retards signalés</div>
-                <div className="value">8</div>
-                <span className="change down">+2 aujourd'hui</span>
+                <div className="value">{stats.retards}</div>
+                <span className="change down">À traiter</span>
               </div>
             </div>
 
@@ -477,10 +577,22 @@ const ServiceDashboard = () => {
                       <tr><th>Matériel</th><th>Type</th><th>Agent</th><th>Statut</th></tr>
                     </thead>
                     <tbody>
-                      <tr><td>Pelle DS-12</td><td>EMPRUNT</td><td>Rakoto J.</td><td><span className="badge yellow">En cours</span></td></tr>
-                      <tr><td>Brouette 45L</td><td>RETOUR</td><td>Ranaivo M.</td><td><span className="badge green">Retourné</span></td></tr>
-                      <tr><td>Perceuse Bosh</td><td>RÉPARATION</td><td>Andry R.</td><td><span className="badge blue">En réparation</span></td></tr>
-                      <tr><td>Échelle 6m</td><td>EMPRUNT</td><td>Rakotomalala</td><td><span className="badge red">En retard</span></td></tr>
+                      {derniersMouvements.length > 0 ? (
+                        derniersMouvements.map((mvt) => (
+                          <tr key={mvt.id}>
+                            <td>{mvt.materiel?.nom || 'N/A'}</td>
+                            <td>{mvt.type}</td>
+                            <td>{mvt.agent_concerner ? `${mvt.agent_concerner.nom} ${mvt.agent_concerner.prenom}` : 'Système'}</td>
+                            <td>
+                              <span className={`badge ${mvt.statut === 'EN_COURS' ? 'yellow' : mvt.statut === 'RETOURNE' ? 'green' : mvt.statut === 'EN_RETARD' ? 'red' : 'blue'}`}>
+                                {mvt.statut}
+                              </span>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr><td colSpan="4">Aucun mouvement récent</td></tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -488,31 +600,19 @@ const ServiceDashboard = () => {
 
               <div className="card">
                 <h3>Activité récente</h3>
-                <div className="activity-item">
-                  <span className="dot green"></span>
-                  <span className="text">Nouvel agent créé : <strong>Rakoto Jean</strong></span>
-                  <span className="time">15 min</span>
-                </div>
-                <div className="activity-item">
-                  <span className="dot blue"></span>
-                  <span className="text">Mouvement enregistré : <strong>Emprunt pelle</strong></span>
-                  <span className="time">1h</span>
-                </div>
-                <div className="activity-item">
-                  <span className="dot yellow"></span>
-                  <span className="text">Seuil d'alerte : <strong>Brouettes</strong> (stock bas)</span>
-                  <span className="time">3h</span>
-                </div>
-                <div className="activity-item">
-                  <span className="dot red"></span>
-                  <span className="text">Retard signalé : <strong>Échelle 6m</strong></span>
-                  <span className="time">5h</span>
-                </div>
-                <div className="activity-item">
-                  <span className="dot green"></span>
-                  <span className="text">Compte validé : <strong>Ranaivo M.</strong></span>
-                  <span className="time">hier</span>
-                </div>
+                {activites.length > 0 ? (
+                  activites.map((act, index) => (
+                    <div className="activity-item" key={index}>
+                      <span className={`dot ${act.statut === 'RETOURNE' ? 'green' : act.statut === 'EN_RETARD' ? 'red' : 'blue'}`}></span>
+                      <span className="text">
+                        {act.type} : <strong>{act.materiel}</strong> {act.agent !== 'Système' && `- ${act.agent}`}
+                      </span>
+                      <span className="time">{act.date}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="activity-item">Aucune activité récente</div>
+                )}
               </div>
             </div>
 
@@ -528,26 +628,22 @@ const ServiceDashboard = () => {
                     <tr><th>Nom</th><th>Email</th><th>Poste</th><th>Brigade</th><th>Action</th></tr>
                   </thead>
                   <tbody>
-                    <tr>
-                      <td>Rakotoarimanana Jean</td>
-                      <td>jean.rakoto@fce.mg</td>
-                      <td>GL</td>
-                      <td>BR FI</td>
-                      <td>
-                        <button className="btn-sm success">Valider</button>
-                        <button className="btn-sm danger">Rejeter</button>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td>Razafindrakoto Marie</td>
-                      <td>marie.raz@fce.mg</td>
-                      <td>CN</td>
-                      <td>BOA</td>
-                      <td>
-                        <button className="btn-sm success">Valider</button>
-                        <button className="btn-sm danger">Rejeter</button>
-                      </td>
-                    </tr>
+                    {comptesEnAttente.length > 0 ? (
+                      comptesEnAttente.map((user) => (
+                        <tr key={user.id}>
+                          <td>{user.nom} {user.prenom}</td>
+                          <td>{user.email}</td>
+                          <td>{user.role}</td>
+                          <td>{user.brigade?.nom || 'N/A'}</td>
+                          <td>
+                            <button className="btn-sm success">Valider</button>
+                            <button className="btn-sm danger">Rejeter</button>
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr><td colSpan="5">Aucun compte en attente</td></tr>
+                    )}
                   </tbody>
                 </table>
               </div>

@@ -1,15 +1,15 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { createBrowserRouter, RouterProvider, Outlet, useNavigation } from 'react-router-dom';
 import Login from './pages/Login';
 import Register from './pages/Register';
 // Chef de Service
-import ServiceDashboard from './pages/ServiceDashboard';
-import ServiceMateriels from './pages/ServiceMateriels';
-import ServiceMouvements from './pages/ServiceMouvements';
-import ServiceStock from './pages/ServiceStock';
-import ServiceUsers from './pages/ServiceUsers';
-import ServiceRapports from './pages/ServiceRapports';
-import ServiceParametres from './pages/ServiceParametres';
+import ServiceDashboard, { serviceDashboardLoader, ServiceDashboardError } from './pages/ServiceDashboard';
+import ServiceMateriels, { serviceMaterielsLoader, ServiceMaterielsError } from './pages/ServiceMateriels';
+import ServiceMouvements, { serviceMouvementsLoader, ServiceMouvementsError } from './pages/ServiceMouvements';
+import ServiceStock, { serviceStockLoader, ServiceStockError } from './pages/ServiceStock';
+import ServiceUsers, { serviceUsersLoader, ServiceUsersError } from './pages/ServiceUsers';
+import ServiceRapports, { serviceRapportsLoader, ServiceRapportsError } from './pages/ServiceRapports';
+import ServiceParametres, { serviceParametresLoader, ServiceParametresError } from './pages/ServiceParametres';
 // Chef de Section
 import SectionDashboard from './pages/SectionDashboard';
 import SectionMateriels from './pages/SectionMateriels';
@@ -41,59 +41,134 @@ import CNProfil from './pages/CNProfil';
 import CNRapports from './pages/CNRapports';
 import CNParametres from './pages/CNParametres';
 
-function App() {
+// Layout racine : englobe toutes les pages et affiche une barre de
+// progression en haut de l'écran pendant qu'un loader de route charge
+// ses données (navigation.state === 'loading').
+function Layout() {
+  const navigation = useNavigation();
+  const isLoading = navigation.state === 'loading';
+
   return (
-    <BrowserRouter>
-      <Routes>
-        {/* Auth */}
-        <Route path="/" element={<Login />} />
-        <Route path="/register" element={<Register />} />
-
-        {/* Chef de Service */}
-        <Route path="/dashboard" element={<ServiceDashboard />} />
-        <Route path="/materiels" element={<ServiceMateriels />} />
-        <Route path="/mouvements" element={<ServiceMouvements />} />
-        <Route path="/stock" element={<ServiceStock />} />
-        <Route path="/users" element={<ServiceUsers />} />
-        <Route path="/rapports" element={<ServiceRapports />} />
-        <Route path="/parametres" element={<ServiceParametres />} />
-
-        {/* Chef de Section */}
-        <Route path="/section/dashboard" element={<SectionDashboard />} />
-        <Route path="/section/materiels" element={<SectionMateriels />} />
-        <Route path="/section/mouvements" element={<SectionMouvements />} />
-        <Route path="/section/stock" element={<SectionStock />} />
-        <Route path="/section/users" element={<SectionUsers />} />
-        <Route path="/section/rapports" element={<SectionRapports />} />
-        <Route path="/section/parametres" element={<SectionParametres />} />
-
-        {/* Chef de Brigade */}
-        <Route path="/brigade/dashboard" element={<BrigadeDashboard />} />
-        <Route path="/brigade/materiels" element={<BrigadeMateriels />} />
-        <Route path="/brigade/mouvements" element={<BrigadeMouvements />} />
-        <Route path="/brigade/stock" element={<BrigadeStock />} />
-        <Route path="/brigade/users" element={<BrigadeUsers />} />
-        <Route path="/brigade/rapports" element={<BrigadeRapports />} />
-        <Route path="/brigade/parametres" element={<BrigadeParametres />} />
-
-        {/* Garde Ligne */}
-        <Route path="/gl/dashboard" element={<GLDashboard />} />
-        <Route path="/gl/materiels" element={<GLMateriels />} />
-        <Route path="/gl/mouvements" element={<GLMouvements />} />
-        <Route path="/gl/profile" element={<GLProfil />} />
-        <Route path="/gl/rapports" element={<GLRapports />} />
-        <Route path="/gl/parametres" element={<GLParametres />} />
-
-        {/* Cantonnier */}
-        <Route path="/cn/dashboard" element={<CNDashboard />} />
-        <Route path="/cn/materiels" element={<CNMateriels />} />
-        <Route path="/cn/mouvements" element={<CNMouvements />} />
-        <Route path="/cn/profile" element={<CNProfil />} />
-        <Route path="/cn/rapports" element={<CNRapports />} />
-        <Route path="/cn/parametres" element={<CNParametres />} />
-      </Routes>
-    </BrowserRouter>
+    <>
+      <style>{`
+        .top-loading-bar {
+          position: fixed;
+          top: 0;
+          left: 0;
+          height: 3px;
+          width: 100%;
+          z-index: 9999;
+          background: rgba(37, 99, 235, 0.15);
+          overflow: hidden;
+        }
+        .top-loading-bar::after {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: 0;
+          height: 100%;
+          width: 40%;
+          background: #2563eb;
+          border-radius: 2px;
+          animation: top-loading-slide 1s ease-in-out infinite;
+        }
+        @keyframes top-loading-slide {
+          0% { left: -40%; }
+          100% { left: 100%; }
+        }
+      `}</style>
+      {isLoading && <div className="top-loading-bar" />}
+      <Outlet />
+    </>
   );
+}
+
+const router = createBrowserRouter([
+  {
+    element: <Layout />,
+    children: [
+      // Auth
+      { path: '/', element: <Login /> },
+      { path: '/register', element: <Register /> },
+
+      // Chef de Service
+      {
+        path: '/dashboard',
+        element: <ServiceDashboard />,
+        loader: serviceDashboardLoader,
+        errorElement: <ServiceDashboardError />,
+      },
+      { path: '/materiels', element: <ServiceMateriels />, loader: serviceMaterielsLoader, errorElement: <ServiceMaterielsError /> },
+      {
+        path: '/mouvements',
+        element: <ServiceMouvements />,
+        loader: serviceMouvementsLoader,
+        errorElement: <ServiceMouvementsError />,
+      },
+      {
+        path: '/stock',
+        element: <ServiceStock />,
+        loader: serviceStockLoader,
+        errorElement: <ServiceStockError />,
+      },
+      {
+        path: '/users',
+        element: <ServiceUsers />,
+        loader: serviceUsersLoader,
+        errorElement: <ServiceUsersError />,
+      },
+      {
+        path: '/rapports',
+        element: <ServiceRapports />,
+        loader: serviceRapportsLoader,
+        errorElement: <ServiceRapportsError />,
+      },
+      {
+        path: '/parametres',
+        element: <ServiceParametres />,
+        loader: serviceParametresLoader,
+        errorElement: <ServiceParametresError />,
+      },
+
+      // Chef de Section
+      { path: '/section/dashboard', element: <SectionDashboard /> },
+      { path: '/section/materiels', element: <SectionMateriels /> },
+      { path: '/section/mouvements', element: <SectionMouvements /> },
+      { path: '/section/stock', element: <SectionStock /> },
+      { path: '/section/users', element: <SectionUsers /> },
+      { path: '/section/rapports', element: <SectionRapports /> },
+      { path: '/section/parametres', element: <SectionParametres /> },
+
+      // Chef de Brigade
+      { path: '/brigade/dashboard', element: <BrigadeDashboard /> },
+      { path: '/brigade/materiels', element: <BrigadeMateriels /> },
+      { path: '/brigade/mouvements', element: <BrigadeMouvements /> },
+      { path: '/brigade/stock', element: <BrigadeStock /> },
+      { path: '/brigade/users', element: <BrigadeUsers /> },
+      { path: '/brigade/rapports', element: <BrigadeRapports /> },
+      { path: '/brigade/parametres', element: <BrigadeParametres /> },
+
+      // Garde Ligne
+      { path: '/gl/dashboard', element: <GLDashboard /> },
+      { path: '/gl/materiels', element: <GLMateriels /> },
+      { path: '/gl/mouvements', element: <GLMouvements /> },
+      { path: '/gl/profile', element: <GLProfil /> },
+      { path: '/gl/rapports', element: <GLRapports /> },
+      { path: '/gl/parametres', element: <GLParametres /> },
+
+      // Cantonnier
+      { path: '/cn/dashboard', element: <CNDashboard /> },
+      { path: '/cn/materiels', element: <CNMateriels /> },
+      { path: '/cn/mouvements', element: <CNMouvements /> },
+      { path: '/cn/profile', element: <CNProfil /> },
+      { path: '/cn/rapports', element: <CNRapports /> },
+      { path: '/cn/parametres', element: <CNParametres /> },
+    ],
+  },
+]);
+
+function App() {
+  return <RouterProvider router={router} />;
 }
 
 export default App;

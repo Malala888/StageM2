@@ -1,25 +1,129 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useLoaderData, useRouteError } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
+// ─── Cache mémoire ───
+let usersCache = null;
+let usersCacheTime = 0;
+const CACHE_TTL_MS = 15000;
+
+async function fetchUsersData() {
+  const now = Date.now();
+  if (usersCache && now - usersCacheTime < CACHE_TTL_MS) {
+    return usersCache;
+  }
+
+  const [
+    { data: userData },
+    { data: usersData },
+    { data: sectionsData },
+    { data: brigadesData },
+  ] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/accounts/users/'),
+    api.get('/personnel/sections/'),
+    api.get('/personnel/brigades/'),
+  ]);
+
+  // Calcul des statistiques (nombre d'agents par brigade/section)
+  const brigadesWithCount = brigadesData.map(b => ({
+    ...b,
+    agents: usersData.filter(u => u.brigade === b.id).length,
+  }));
+
+  const sectionsWithCount = sectionsData.map(s => ({
+    ...s,
+    brigades: brigadesData.filter(b => b.section === s.id).length,
+    agents: usersData.filter(u => u.section === s.id).length,
+  }));
+
+  const result = {
+    user: userData,
+    users: usersData,
+    sections: sectionsWithCount,
+    brigades: brigadesWithCount,
+  };
+
+  usersCache = result;
+  usersCacheTime = now;
+  return result;
+}
+
+// ─── Loader ───
+export async function serviceUsersLoader() {
+  return fetchUsersData();
+}
+
+// ─── ErrorElement ───
+export function ServiceUsersError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement des utilisateurs:', error);
+  return (
+    <div className="users-body">
+      <div className="app">
+        <Sidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh', flexDirection: 'column' }}>
+          <h2 style={{ color: 'red' }}>Erreur</h2>
+          <p>Impossible de charger les données. Veuillez réessayer.</p>
+          <button className="btn-sm primary" onClick={() => window.location.reload()}>Réessayer</button>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── Composant principal ───
 const ServiceUsers = () => {
-  // ─── States pour les filtres ───
+  const { user, users, sections, brigades } = useLoaderData();
+
+  // ─── États pour les filtres ───
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
   const [brigadeFilter, setBrigadeFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [filteredUsers, setFilteredUsers] = useState(users);
 
-  // ─── States pour les onglets ───
-  const [activeTab, setActiveTab] = useState('sections');
+  // ─── États pour les onglets ───
+  const [activeTab, setActiveTab] = useState('users');
 
-  // ─── States pour les formulaires ───
+  // ─── États pour les formulaires ───
   const [newSection, setNewSection] = useState('');
   const [newBrigade, setNewBrigade] = useState('');
-  const [brigadeSection, setBrigadeSection] = useState('FIA');
+  const [brigadeSection, setBrigadeSection] = useState('');
+
+  // Appliquer les filtres
+  useEffect(() => {
+    let result = users;
+
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      result = result.filter(u =>
+        u.nom.toLowerCase().includes(term) ||
+        u.prenom.toLowerCase().includes(term) ||
+        u.email.toLowerCase().includes(term)
+      );
+    }
+
+    if (roleFilter) {
+      result = result.filter(u => u.role === roleFilter);
+    }
+
+    if (brigadeFilter) {
+      result = result.filter(u => u.brigade === parseInt(brigadeFilter));
+    }
+
+    if (statusFilter) {
+      result = result.filter(u => u.statut === statusFilter);
+    }
+
+    setFilteredUsers(result);
+  }, [searchTerm, roleFilter, brigadeFilter, statusFilter, users]);
 
   // ─── Handlers ───
-  const handleFilter = () => {
-    alert('Filtres appliqués !');
+  const handleFilter = (e) => {
+    e.preventDefault();
   };
 
   const handleReset = () => {
@@ -37,12 +141,26 @@ const ServiceUsers = () => {
     alert(`✏️ Modifier : ${nom}`);
   };
 
-  const handleDelete = (nom) => {
-    alert(`🗑️ Supprimer : ${nom}`);
+  const handleDelete = async (id, nom) => {
+    if (!confirm(`Supprimer "${nom}" ?`)) return;
+    try {
+      await api.delete(`/accounts/users/${id}/`);
+      alert('✅ Utilisateur supprimé');
+      // Recharger les données (on pourrait rafraîchir le cache)
+      window.location.reload();
+    } catch (err) {
+      alert('❌ Erreur lors de la suppression');
+    }
   };
 
-  const handleValidate = (nom) => {
-    alert(`✅ Valider : ${nom}`);
+  const handleValidate = async (id, nom) => {
+    try {
+      await api.patch(`/accounts/users/${id}/valider/`);
+      alert(`✅ ${nom} validé avec succès`);
+      window.location.reload();
+    } catch (err) {
+      alert('❌ Erreur lors de la validation');
+    }
   };
 
   const handleReject = (nom) => {
@@ -60,7 +178,7 @@ const ServiceUsers = () => {
 
   const handleAddBrigade = () => {
     if (newBrigade.trim()) {
-      alert(`➕ Brigade ajoutée : ${newBrigade} (Section: ${brigadeSection === 'FIA' ? 'Fianarantsoa' : 'Manakara'})`);
+      alert(`➕ Brigade ajoutée : ${newBrigade} (Section: ${brigadeSection || 'Non spécifiée'})`);
       setNewBrigade('');
     } else {
       alert('Veuillez saisir un nom de brigade');
@@ -83,6 +201,13 @@ const ServiceUsers = () => {
     alert(`🗑️ Supprimer la brigade : ${nom}`);
   };
 
+  // Trouver la section d'une brigade
+  const getSectionName = (sectionId) => {
+    const section = sections.find(s => s.id === sectionId);
+    return section ? section.nom : 'N/A';
+  };
+
+  // Rendu
   return (
     <>
       <style>{`
@@ -107,8 +232,6 @@ const ServiceUsers = () => {
           border: none !important;
           padding: 0 !important;
         }
-
-        @import url('https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap');
 
         .users-body {
           font-family: 'Inter', sans-serif;
@@ -135,7 +258,6 @@ const ServiceUsers = () => {
           min-height: 100vh;
         }
 
-        /* ─── Sidebar fixe ─── */
         .sidebar {
           position: fixed;
           top: 0;
@@ -155,7 +277,6 @@ const ServiceUsers = () => {
           z-index: 100;
         }
 
-        /* ─── Contenu principal avec marge ─── */
         .main {
           flex: 1;
           padding: 28px 36px;
@@ -492,9 +613,9 @@ const ServiceUsers = () => {
                 <div className="sub">Gestion des comptes, sections et brigades</div>
               </div>
               <div className="user-badge">
-                <div className="avatar">AD</div>
+                <div className="avatar">{user?.nom ? user.nom[0] : 'AD'}</div>
                 <div>
-                  <div className="name">Admin</div>
+                  <div className="name">{user?.nom || 'Admin'}</div>
                   <div className="role">Chef Service</div>
                 </div>
               </div>
@@ -503,7 +624,7 @@ const ServiceUsers = () => {
             {/* ─── Liste des utilisateurs ─── */}
             <div className="card">
               <h3>
-                👥 Comptes utilisateurs
+                👥 Comptes utilisateurs ({filteredUsers.length})
                 <span>
                   <button className="btn-sm success" style={{ padding: '8px 16px' }} onClick={handleAddUser}>
                     + Nouvel utilisateur
@@ -514,7 +635,7 @@ const ServiceUsers = () => {
               <div className="filters">
                 <input
                   type="text"
-                  placeholder="🔍 Rechercher..."
+                  placeholder="🔍 Rechercher (nom, prénom, email)..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
@@ -528,10 +649,9 @@ const ServiceUsers = () => {
                 </select>
                 <select value={brigadeFilter} onChange={(e) => setBrigadeFilter(e.target.value)}>
                   <option value="">Brigade</option>
-                  <option value="BOA">BOA</option>
-                  <option value="BR FI">BR FI</option>
-                  <option value="BR ADV">BR ADV</option>
-                  <option value="BR TLG">BR TLG</option>
+                  {brigades.map(b => (
+                    <option key={b.id} value={b.id}>{b.nom}</option>
+                  ))}
                 </select>
                 <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                   <option value="">Statut</option>
@@ -561,50 +681,72 @@ const ServiceUsers = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    <tr>
-                      <td><strong>Rakoto Jean</strong></td>
-                      <td>jean.rakoto@fce.mg</td>
-                      <td><span className="badge blue">GL</span></td>
-                      <td>BR FI</td>
-                      <td><span className="badge green">ACTIF</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm outline" onClick={() => handleEdit('Rakoto Jean')}>✏️</button>
-                        <button className="btn-sm danger" onClick={() => handleDelete('Rakoto Jean')}>🗑️</button>
-                        <select className="status-select" defaultValue="ACTIF">
-                          <option value="ACTIF">ACTIF</option>
-                          <option value="SUSPENDU">SUSPENDU</option>
-                          <option value="ARCHIVE">ARCHIVE</option>
-                        </select>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>Ranaivo Marie</strong></td>
-                      <td>marie.ranaivo@fce.mg</td>
-                      <td><span className="badge blue">CN</span></td>
-                      <td>BOA</td>
-                      <td><span className="badge yellow">EN_ATTENTE</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm success" onClick={() => handleValidate('Ranaivo Marie')}>Valider</button>
-                        <button className="btn-sm danger" onClick={() => handleReject('Ranaivo Marie')}>Rejeter</button>
-                        <button className="btn-sm outline" onClick={() => handleEdit('Ranaivo Marie')}>✏️</button>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>Andriatsitohaina Faly</strong></td>
-                      <td>faly.andri@fce.mg</td>
-                      <td><span className="badge blue">CHEF_BRIGADE</span></td>
-                      <td>BR ADV</td>
-                      <td><span className="badge green">ACTIF</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm outline" onClick={() => handleEdit('Andriatsitohaina Faly')}>✏️</button>
-                        <button className="btn-sm danger" onClick={() => handleDelete('Andriatsitohaina Faly')}>🗑️</button>
-                        <select className="status-select" defaultValue="ACTIF">
-                          <option value="ACTIF">ACTIF</option>
-                          <option value="SUSPENDU">SUSPENDU</option>
-                          <option value="ARCHIVE">ARCHIVE</option>
-                        </select>
-                      </td>
-                    </tr>
+                    {filteredUsers.length === 0 ? (
+                      <tr>
+                        <td colSpan="6" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
+                          Aucun utilisateur trouvé
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredUsers.map((u) => {
+                        const roleClass = {
+                          'ADMIN': 'red',
+                          'CHEF_SECTION': 'blue',
+                          'CHEF_BRIGADE': 'blue',
+                          'GL': 'blue',
+                          'CN': 'blue',
+                        }[u.role] || 'gray';
+
+                        const statusClass = {
+                          'ACTIF': 'green',
+                          'EN_ATTENTE': 'yellow',
+                          'SUSPENDU': 'red',
+                          'ARCHIVE': 'gray',
+                          'REJETE': 'red',
+                        }[u.statut] || 'gray';
+
+                        const brigadeName = brigades.find(b => b.id === u.brigade)?.nom || 'N/A';
+
+                        return (
+                          <tr key={u.id}>
+                            <td><strong>{u.nom} {u.prenom}</strong></td>
+                            <td>{u.email}</td>
+                            <td><span className={`badge ${roleClass}`}>{u.role}</span></td>
+                            <td>{brigadeName}</td>
+                            <td><span className={`badge ${statusClass}`}>{u.statut}</span></td>
+                            <td className="actions-cell">
+                              {u.statut === 'EN_ATTENTE' && (
+                                <>
+                                  <button className="btn-sm success" onClick={() => handleValidate(u.id, `${u.nom} ${u.prenom}`)}>Valider</button>
+                                  <button className="btn-sm danger" onClick={() => handleReject(`${u.nom} ${u.prenom}`)}>Rejeter</button>
+                                </>
+                              )}
+                              <button className="btn-sm outline" onClick={() => handleEdit(`${u.nom} ${u.prenom}`)}>✏️</button>
+                              <button className="btn-sm danger" onClick={() => handleDelete(u.id, `${u.nom} ${u.prenom}`)}>🗑️</button>
+                              {u.statut !== 'EN_ATTENTE' && (
+                                <select
+                                  className="status-select"
+                                  defaultValue={u.statut}
+                                  onChange={async (e) => {
+                                    try {
+                                      await api.patch(`/accounts/users/${u.id}/`, { statut: e.target.value });
+                                      alert('✅ Statut mis à jour');
+                                      window.location.reload();
+                                    } catch (err) {
+                                      alert('❌ Erreur lors de la mise à jour');
+                                    }
+                                  }}
+                                >
+                                  <option value="ACTIF">ACTIF</option>
+                                  <option value="SUSPENDU">SUSPENDU</option>
+                                  <option value="ARCHIVE">ARCHIVE</option>
+                                </select>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -658,26 +800,22 @@ const ServiceUsers = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      <tr>
-                        <td><strong>Fianarantsoa</strong></td>
-                        <td>FIA</td>
-                        <td>3</td>
-                        <td>28</td>
-                        <td className="actions-cell">
-                          <button className="btn-sm outline" onClick={() => handleEditSection('Fianarantsoa')}>✏️</button>
-                          <button className="btn-sm danger" onClick={() => handleDeleteSection('Fianarantsoa')}>🗑️</button>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td><strong>Manakara</strong></td>
-                        <td>MAN</td>
-                        <td>2</td>
-                        <td>18</td>
-                        <td className="actions-cell">
-                          <button className="btn-sm outline" onClick={() => handleEditSection('Manakara')}>✏️</button>
-                          <button className="btn-sm danger" onClick={() => handleDeleteSection('Manakara')}>🗑️</button>
-                        </td>
-                      </tr>
+                      {sections.length === 0 ? (
+                        <tr><td colSpan="5" style={{ textAlign: 'center', color: '#94a3b8' }}>Aucune section</td></tr>
+                      ) : (
+                        sections.map((s) => (
+                          <tr key={s.id}>
+                            <td><strong>{s.nom}</strong></td>
+                            <td>{s.code}</td>
+                            <td>{s.brigades || 0}</td>
+                            <td>{s.agents || 0}</td>
+                            <td className="actions-cell">
+                              <button className="btn-sm outline" onClick={() => handleEditSection(s.nom)}>✏️</button>
+                              <button className="btn-sm danger" onClick={() => handleDeleteSection(s.nom)}>🗑️</button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -703,8 +841,10 @@ const ServiceUsers = () => {
                       value={brigadeSection}
                       onChange={(e) => setBrigadeSection(e.target.value)}
                     >
-                      <option value="FIA">Fianarantsoa</option>
-                      <option value="MAN">Manakara</option>
+                      <option value="">Sélectionner</option>
+                      {sections.map(s => (
+                        <option key={s.id} value={s.id}>{s.nom}</option>
+                      ))}
                     </select>
                   </div>
                   <button className="btn-sm primary" style={{ padding: '8px 18px' }} onClick={handleAddBrigade}>
@@ -718,56 +858,27 @@ const ServiceUsers = () => {
                         <th>Nom</th>
                         <th>Code</th>
                         <th>Section</th>
-                        <th>Chef</th>
                         <th>Agents</th>
                         <th>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
-                      <tr>
-                        <td><strong>Base Opérationnelle d'Attente</strong></td>
-                        <td>BOA</td>
-                        <td>Fianarantsoa</td>
-                        <td>Rakoto J.</td>
-                        <td>12</td>
-                        <td className="actions-cell">
-                          <button className="btn-sm outline" onClick={() => handleEditBrigade('BOA')}>✏️</button>
-                          <button className="btn-sm danger" onClick={() => handleDeleteBrigade('BOA')}>🗑️</button>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td><strong>Brigade Régionale Fianarantsoa</strong></td>
-                        <td>BR FI</td>
-                        <td>Fianarantsoa</td>
-                        <td>Razafy L.</td>
-                        <td>18</td>
-                        <td className="actions-cell">
-                          <button className="btn-sm outline" onClick={() => handleEditBrigade('BR FI')}>✏️</button>
-                          <button className="btn-sm danger" onClick={() => handleDeleteBrigade('BR FI')}>🗑️</button>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td><strong>Brigade Régionale Andovoka</strong></td>
-                        <td>BR ADV</td>
-                        <td>Manakara</td>
-                        <td>—</td>
-                        <td>8</td>
-                        <td className="actions-cell">
-                          <button className="btn-sm outline" onClick={() => handleEditBrigade('BR ADV')}>✏️</button>
-                          <button className="btn-sm danger" onClick={() => handleDeleteBrigade('BR ADV')}>🗑️</button>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td><strong>Brigade Régionale Talata</strong></td>
-                        <td>BR TLG</td>
-                        <td>Manakara</td>
-                        <td>—</td>
-                        <td>6</td>
-                        <td className="actions-cell">
-                          <button className="btn-sm outline" onClick={() => handleEditBrigade('BR TLG')}>✏️</button>
-                          <button className="btn-sm danger" onClick={() => handleDeleteBrigade('BR TLG')}>🗑️</button>
-                        </td>
-                      </tr>
+                      {brigades.length === 0 ? (
+                        <tr><td colSpan="5" style={{ textAlign: 'center', color: '#94a3b8' }}>Aucune brigade</td></tr>
+                      ) : (
+                        brigades.map((b) => (
+                          <tr key={b.id}>
+                            <td><strong>{b.nom}</strong></td>
+                            <td>{b.code}</td>
+                            <td>{getSectionName(b.section)}</td>
+                            <td>{b.agents || 0}</td>
+                            <td className="actions-cell">
+                              <button className="btn-sm outline" onClick={() => handleEditBrigade(b.nom)}>✏️</button>
+                              <button className="btn-sm danger" onClick={() => handleDeleteBrigade(b.nom)}>🗑️</button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>

@@ -1,24 +1,169 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useLoaderData, useRouteError } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
+// ─── Cache mémoire ───
+let rapportsCache = null;
+let rapportsCacheTime = 0;
+const CACHE_TTL_MS = 15000;
+
+async function fetchRapportsData() {
+  const now = Date.now();
+  if (rapportsCache && now - rapportsCacheTime < CACHE_TTL_MS) {
+    return rapportsCache;
+  }
+
+  const [
+    { data: userData },
+    { data: mouvementsData },
+    { data: stockData },
+    { data: materielsData },
+    { data: brigadesData },
+  ] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/materiaux/mouvements/'),
+    api.get('/materiaux/stock/'),
+    api.get('/materiaux/materiels/'),
+    api.get('/personnel/brigades/'),
+  ]);
+
+  // Statistiques globales
+  const totalMouvements = mouvementsData.length;
+  const empruntsEnCours = mouvementsData.filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS').length;
+  const retards = mouvementsData.filter(m => m.statut === 'EN_RETARD').length;
+
+  // Matériels abîmés (état MAUVAIS ou HORS_SERVICE)
+  const materielsAbimes = stockData.filter(s => s.etat === 'MAUVAIS' || s.etat === 'HORS_SERVICE')
+    .reduce((acc, s) => acc + s.quantite, 0);
+
+  // Stock total
+  const stockTotal = stockData.reduce((acc, s) => acc + s.quantite, 0);
+
+  // Statistiques par brigade (nombre de mouvements par brigade)
+  const statsParBrigade = brigadesData.map(b => {
+    const count = mouvementsData.filter(m => m.brigade === b.id).length;
+    return { ...b, count };
+  }).sort((a, b) => b.count - a.count);
+
+  // Top 5 des matériels les plus empruntés (via les mouvements EMPRUNT)
+  const empruntsParMateriel = {};
+  mouvementsData
+    .filter(m => m.type === 'EMPRUNT')
+    .forEach(m => {
+      const id = m.materiel;
+      if (!empruntsParMateriel[id]) empruntsParMateriel[id] = 0;
+      empruntsParMateriel[id] += m.quantite;
+    });
+  const topMateriels = Object.entries(empruntsParMateriel)
+    .map(([id, qte]) => ({ id: parseInt(id), qte }))
+    .sort((a, b) => b.qte - a.qte)
+    .slice(0, 5)
+    .map(item => {
+      const m = materielsData.find(mat => mat.id === item.id);
+      return m ? { nom: m.nom, qte: item.qte } : null;
+    })
+    .filter(Boolean);
+
+  const result = {
+    user: userData,
+    mouvements: mouvementsData,
+    stock: stockData,
+    materiels: materielsData,
+    brigades: brigadesData,
+    totalMouvements,
+    empruntsEnCours,
+    retards,
+    materielsAbimes,
+    stockTotal,
+    statsParBrigade,
+    topMateriels,
+  };
+
+  rapportsCache = result;
+  rapportsCacheTime = now;
+  return result;
+}
+
+// ─── Loader ───
+export async function serviceRapportsLoader() {
+  return fetchRapportsData();
+}
+
+// ─── ErrorElement ───
+export function ServiceRapportsError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement des rapports:', error);
+  return (
+    <div className="rapports-body">
+      <div className="app">
+        <Sidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh', flexDirection: 'column' }}>
+          <h2 style={{ color: 'red' }}>Erreur</h2>
+          <p>Impossible de charger les données. Veuillez réessayer.</p>
+          <button className="btn-sm primary" onClick={() => window.location.reload()}>Réessayer</button>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── Composant principal ───
 const ServiceRapports = () => {
-  // ─── States pour les filtres ───
+  const {
+    user,
+    mouvements,
+    stock,
+    materiels,
+    brigades,
+    totalMouvements,
+    empruntsEnCours,
+    retards,
+    materielsAbimes,
+    stockTotal,
+    statsParBrigade,
+    topMateriels,
+  } = useLoaderData();
+
+  // États pour les filtres
   const [periode, setPeriode] = useState('');
   const [brigade, setBrigade] = useState('');
 
-  // ─── Handlers ───
+  // États pour les statistiques filtrées (pour une démo, on va juste afficher les données globales)
+  // On pourrait filtrer les mouvements selon la période et la brigade, mais pour l'instant on garde les valeurs réelles.
+
+  // Handlers
   const handleGenerer = () => {
     alert(`📊 Rapport généré !\nPériode: ${periode || 'Toutes'}\nBrigade: ${brigade || 'Toutes'}`);
+    // Ici on pourrait recharger les données avec les filtres
   };
 
   const handleExportPDF = () => {
     alert('📥 Export PDF en cours...');
   };
 
-  const handleCardClick = (titre) => {
-    alert(`📄 Voir les détails : ${titre}`);
+  const handleCardClick = (titre, detail) => {
+    alert(`📄 ${titre}\n${detail || ''}`);
   };
+
+  // Fonction pour obtenir le nombre de mouvements par brigade
+  const getMouvementsByBrigade = (brigadeId) => {
+    return mouvements.filter(m => m.brigade === brigadeId).length;
+  };
+
+  // Fonction pour obtenir le top des matériels
+  const getTopMateriels = () => {
+    return topMateriels.map((m, i) => `${i+1}. ${m.nom} (${m.qte})`).join('\n');
+  };
+
+  // Stats par état du stock
+  const statsParEtat = stock.reduce((acc, s) => {
+    acc[s.etat] = (acc[s.etat] || 0) + s.quantite;
+    return acc;
+  }, {});
+
+  const totalAbimes = (statsParEtat['MAUVAIS'] || 0) + (statsParEtat['HORS_SERVICE'] || 0);
 
   return (
     <>
@@ -45,8 +190,6 @@ const ServiceRapports = () => {
           padding: 0 !important;
         }
 
-        @import url('https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap');
-
         .rapports-body {
           font-family: 'Inter', sans-serif;
           background: url(${backgroundImage}) center / cover no-repeat fixed;
@@ -72,7 +215,6 @@ const ServiceRapports = () => {
           min-height: 100vh;
         }
 
-        /* ─── Sidebar fixe ─── */
         .sidebar {
           position: fixed;
           top: 0;
@@ -92,7 +234,6 @@ const ServiceRapports = () => {
           z-index: 100;
         }
 
-        /* ─── Contenu principal avec marge ─── */
         .main {
           flex: 1;
           padding: 28px 36px;
@@ -344,9 +485,9 @@ const ServiceRapports = () => {
                 <div className="sub">Analyses et statistiques</div>
               </div>
               <div className="user-badge">
-                <div className="avatar">AD</div>
+                <div className="avatar">{user?.nom ? user.nom[0] : 'AD'}</div>
                 <div>
-                  <div className="name">Admin</div>
+                  <div className="name">{user?.nom || 'Admin'}</div>
                   <div className="role">Chef Service</div>
                 </div>
               </div>
@@ -361,12 +502,10 @@ const ServiceRapports = () => {
                 <option value="annee">Cette année</option>
               </select>
               <select value={brigade} onChange={(e) => setBrigade(e.target.value)}>
-                <option value="">Brigade</option>
-                <option value="Toutes">Toutes</option>
-                <option value="BOA">BOA</option>
-                <option value="BR FI">BR FI</option>
-                <option value="BR ADV">BR ADV</option>
-                <option value="BR TLG">BR TLG</option>
+                <option value="">Toutes les brigades</option>
+                {brigades.map(b => (
+                  <option key={b.id} value={b.id}>{b.nom}</option>
+                ))}
               </select>
               <button className="btn-sm primary" style={{ padding: '8px 20px' }} onClick={handleGenerer}>
                 Générer
@@ -382,42 +521,59 @@ const ServiceRapports = () => {
 
             {/* ─── Cartes de rapports ─── */}
             <div className="report-grid">
-              <div className="report-card" onClick={() => handleCardClick('Emprunts en cours')}>
+              <div className="report-card" onClick={() => handleCardClick('Emprunts en cours', `${empruntsEnCours} matériels actuellement empruntés`)}>
                 <div className="icon">📊</div>
                 <div className="title">Emprunts en cours</div>
-                <div className="desc">37 matériels actuellement empruntés</div>
-                <span className="badge yellow">+8 ce mois</span>
+                <div className="desc">{empruntsEnCours} matériels actuellement empruntés</div>
+                <span className="badge yellow">{empruntsEnCours > 0 ? `+${empruntsEnCours} en cours` : 'Aucun'}</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Retards')}>
+              <div className="report-card" onClick={() => handleCardClick('Retards', `${retards} retards signalés`)}>
                 <div className="icon">⏰</div>
                 <div className="title">Retards</div>
-                <div className="desc">8 retards signalés</div>
-                <span className="badge red">+2 aujourd'hui</span>
+                <div className="desc">{retards} retards signalés</div>
+                <span className="badge red">{retards > 0 ? `${retards} à traiter` : '✅ Aucun'}</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Par Brigade')}>
+              <div className="report-card" onClick={() => handleCardClick('Par Brigade', statsParBrigade.map(b => `${b.nom} : ${b.count}`).join(' | '))}>
                 <div className="icon">🏢</div>
                 <div className="title">Par Brigade</div>
-                <div className="desc">BR FI : 12 | BOA : 8 | BR ADV : 7</div>
+                <div className="desc">{statsParBrigade.slice(0, 3).map(b => `${b.nom} : ${b.count}`).join(' | ')}</div>
                 <span className="badge blue">Voir détails</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Matériels abîmés')}>
+              <div className="report-card" onClick={() => handleCardClick('Matériels abîmés', `${materielsAbimes} en mauvais état`)}>
                 <div className="icon">🔧</div>
                 <div className="title">Matériels abîmés</div>
-                <div className="desc">76 en mauvais état</div>
-                <span className="badge orange">+12 ce trim.</span>
+                <div className="desc">{materielsAbimes} en mauvais état</div>
+                <span className="badge orange">{materielsAbimes > 0 ? `+${materielsAbimes} à réparer` : '✅ Bon état'}</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Stock total')}>
+              <div className="report-card" onClick={() => handleCardClick('Stock total', `${stockTotal} unités en stock`)}>
                 <div className="icon">📦</div>
                 <div className="title">Stock total</div>
-                <div className="desc">1 243 unités en stock</div>
-                <span className="badge green">+45 ce mois</span>
+                <div className="desc">{stockTotal} unités en stock</div>
+                <span className="badge green">{stockTotal > 0 ? `${stockTotal} disponibles` : 'Stock vide'}</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Mouvements')}>
+              <div className="report-card" onClick={() => handleCardClick('Mouvements', `${totalMouvements} opérations ce mois`)}>
                 <div className="icon">🔄</div>
                 <div className="title">Mouvements</div>
-                <div className="desc">243 opérations ce mois</div>
-                <span className="badge blue">Voir détails</span>
+                <div className="desc">{totalMouvements} opérations au total</div>
+                <span className="badge blue">{totalMouvements > 0 ? `+${totalMouvements} enregistrés` : 'Aucun'}</span>
               </div>
+            </div>
+
+            {/* ─── Détails supplémentaires ─── */}
+            <div className="card">
+              <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '14px' }}>📋 Top 5 des matériels les plus empruntés</h3>
+              {topMateriels.length > 0 ? (
+                <ul style={{ listStyle: 'none', padding: 0 }}>
+                  {topMateriels.map((m, i) => (
+                    <li key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f1f5f9' }}>
+                      <span><strong>{i+1}.</strong> {m.nom}</span>
+                      <span className="badge blue">{m.qte} emprunts</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p style={{ color: '#94a3b8' }}>Aucun emprunt enregistré</p>
+              )}
             </div>
 
           </main>

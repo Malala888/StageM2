@@ -1,12 +1,137 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { useLoaderData, useRouteError } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
+// ─── Cache mémoire ───
+let stockCache = null;
+let stockCacheTime = 0;
+const CACHE_TTL_MS = 15000;
+
+async function fetchStockData() {
+  const now = Date.now();
+  if (stockCache && now - stockCacheTime < CACHE_TTL_MS) {
+    return stockCache;
+  }
+
+  const [
+    { data: userData },
+    { data: materielsData },
+    { data: stockData },
+    { data: brigadesData },
+  ] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/materiaux/materiels/'),
+    api.get('/materiaux/stock/'),
+    api.get('/personnel/brigades/'),
+  ]);
+
+  const result = {
+    user: userData,
+    materiels: materielsData,
+    stock: stockData,
+    brigades: brigadesData,
+  };
+  stockCache = result;
+  stockCacheTime = now;
+  return result;
+}
+
+export async function serviceStockLoader() {
+  return fetchStockData();
+}
+
+export function ServiceStockError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement du stock:', error);
+  return (
+    <div className="stock-body">
+      <div className="app">
+        <Sidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh', flexDirection: 'column' }}>
+          <h2 style={{ color: 'red' }}>Erreur</h2>
+          <p>Impossible de charger les données. Veuillez réessayer.</p>
+          <button className="btn-sm primary" onClick={() => window.location.reload()}>Réessayer</button>
+        </main>
+      </div>
+    </div>
+  );
+}
+
 const ServiceStock = () => {
-  const handleApprovisionner = (materiel) => {
-    alert(`📦 Approvisionner : ${materiel}`);
+  const { user, materiels, stock, brigades } = useLoaderData();
+
+  // ─── Calculer le stock par état ───
+  const stockParEtat = stock.reduce((acc, item) => {
+    acc[item.etat] = (acc[item.etat] || 0) + item.quantite;
+    return acc;
+  }, {});
+
+  // États possibles
+  const etats = ['NEUF', 'BON', 'MOYEN', 'MAUVAIS', 'HORS_SERVICE'];
+  const etatsLabels = {
+    NEUF: 'NEUF',
+    BON: 'BON',
+    MOYEN: 'MOYEN',
+    MAUVAIS: 'MAUVAIS',
+    HORS_SERVICE: 'HORS_SERVICE',
+  };
+  const etatsColors = {
+    NEUF: 'neuf',
+    BON: 'bon',
+    MOYEN: 'moyen',
+    MAUVAIS: 'mauvais',
+    HORS_SERVICE: 'hs',
   };
 
+  // ─── Calculer les alertes de stock bas ───
+  const getStockTotal = (materielId) => {
+    return stock
+      .filter(s => s.materiel === materielId)
+      .reduce((acc, s) => acc + s.quantite, 0);
+  };
+
+  const alertes = materiels
+    .map(m => {
+      const total = getStockTotal(m.id);
+      const seuil = m.seuil_alerte || 5;
+      return { ...m, total, seuil };
+    })
+    .filter(m => m.total < m.seuil && m.total > 0) // uniquement ceux qui sont bas mais non nuls
+    .sort((a, b) => a.total - b.total);
+
+  // ─── Gérer l'approvisionnement ───
+  const handleApprovisionner = async (materielId, nom) => {
+    // On propose une quantité et un état (par défaut NEUF)
+    const quantite = parseInt(prompt(`Quantité à approvisionner pour "${nom}" :`, '1'));
+    if (!quantite || quantite <= 0) return;
+    const etat = prompt(`État (NEUF, BON, MOYEN, MAUVAIS, HORS_SERVICE) :`, 'NEUF') || 'NEUF';
+    if (!['NEUF', 'BON', 'MOYEN', 'MAUVAIS', 'HORS_SERVICE'].includes(etat.toUpperCase())) {
+      alert('État invalide. Utilisez NEUF, BON, MOYEN, MAUVAIS ou HORS_SERVICE.');
+      return;
+    }
+
+    try {
+      // Créer un mouvement d'approvisionnement
+      await api.post('/materiaux/mouvements/', {
+        type: 'APPROVISIONNEMENT',
+        materiel: materielId,
+        quantite: quantite,
+        date_mouvement: new Date().toISOString().split('T')[0],
+        brigade: user.brigade?.id || null, // ou bien on demande la brigade ?
+        commentaire: `Approvisionnement de ${quantite} ${nom} en état ${etat.toUpperCase()}`,
+      });
+      alert(`✅ ${quantite} ${nom} approvisionné(s) avec succès en état ${etat.toUpperCase()} !`);
+      // Pour rafraîchir, on pourrait recharger le loader, mais on va simplement recharger la page pour simplifier
+      window.location.reload();
+    } catch (err) {
+      console.error(err);
+      alert('❌ Erreur lors de l\'approvisionnement.');
+    }
+  };
+
+  // ─── Rendu ───
   return (
     <>
       <style>{`
@@ -31,8 +156,6 @@ const ServiceStock = () => {
           border: none !important;
           padding: 0 !important;
         }
-
-        @import url('https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap');
 
         .stock-body {
           font-family: 'Inter', sans-serif;
@@ -59,7 +182,6 @@ const ServiceStock = () => {
           min-height: 100vh;
         }
 
-        /* ─── Sidebar fixe ─── */
         .sidebar {
           position: fixed;
           top: 0;
@@ -79,7 +201,6 @@ const ServiceStock = () => {
           z-index: 100;
         }
 
-        /* ─── Contenu principal avec marge ─── */
         .main {
           flex: 1;
           padding: 28px 36px;
@@ -346,9 +467,9 @@ const ServiceStock = () => {
                 <div className="sub">Vue globale par état et localisation</div>
               </div>
               <div className="user-badge">
-                <div className="avatar">AD</div>
+                <div className="avatar">{user?.nom ? user.nom[0] : 'AD'}</div>
                 <div>
-                  <div className="name">Admin</div>
+                  <div className="name">{user?.nom || 'Admin'}</div>
                   <div className="role">Chef Service</div>
                 </div>
               </div>
@@ -356,31 +477,13 @@ const ServiceStock = () => {
 
             {/* ─── Stock par état ─── */}
             <div className="stock-grid">
-              <div className="stock-card">
-                <div className="dot neuf"></div>
-                <div className="count">342</div>
-                <div className="label">NEUF</div>
-              </div>
-              <div className="stock-card">
-                <div className="dot bon"></div>
-                <div className="count">587</div>
-                <div className="label">BON</div>
-              </div>
-              <div className="stock-card">
-                <div className="dot moyen"></div>
-                <div className="count">189</div>
-                <div className="label">MOYEN</div>
-              </div>
-              <div className="stock-card">
-                <div className="dot mauvais"></div>
-                <div className="count">76</div>
-                <div className="label">MAUVAIS</div>
-              </div>
-              <div className="stock-card">
-                <div className="dot hs"></div>
-                <div className="count">49</div>
-                <div className="label">HORS_SERVICE</div>
-              </div>
+              {etats.map(etat => (
+                <div className="stock-card" key={etat}>
+                  <div className={`dot ${etatsColors[etat]}`}></div>
+                  <div className="count">{stockParEtat[etat] || 0}</div>
+                  <div className="label">{etatsLabels[etat]}</div>
+                </div>
+              ))}
             </div>
 
             {/* ─── Alertes stock bas ─── */}
@@ -398,48 +501,26 @@ const ServiceStock = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    <tr>
-                      <td><strong>Brouette 45L</strong></td>
-                      <td>3</td>
-                      <td>10</td>
-                      <td>BR FI</td>
-                      <td>
-                        <button
-                          className="btn-sm primary"
-                          onClick={() => handleApprovisionner('Brouette 45L')}
-                        >
-                          Approvisionner
-                        </button>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>Échelle 6m</strong></td>
-                      <td>2</td>
-                      <td>5</td>
-                      <td>BOA</td>
-                      <td>
-                        <button
-                          className="btn-sm primary"
-                          onClick={() => handleApprovisionner('Échelle 6m')}
-                        >
-                          Approvisionner
-                        </button>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>Perceuse Bosh</strong></td>
-                      <td>4</td>
-                      <td>8</td>
-                      <td>BR ADV</td>
-                      <td>
-                        <button
-                          className="btn-sm primary"
-                          onClick={() => handleApprovisionner('Perceuse Bosh')}
-                        >
-                          Approvisionner
-                        </button>
-                      </td>
-                    </tr>
+                    {alertes.length === 0 ? (
+                      <tr><td colSpan="5" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>✅ Aucune alerte de stock bas</td></tr>
+                    ) : (
+                      alertes.map(m => (
+                        <tr key={m.id}>
+                          <td><strong>{m.nom}</strong></td>
+                          <td>{m.total}</td>
+                          <td>{m.seuil}</td>
+                          <td>{user?.brigade?.nom || 'N/A'}</td>
+                          <td>
+                            <button
+                              className="btn-sm primary"
+                              onClick={() => handleApprovisionner(m.id, m.nom)}
+                            >
+                              Approvisionner
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>

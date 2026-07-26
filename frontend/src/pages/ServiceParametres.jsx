@@ -1,18 +1,116 @@
 import React, { useState } from 'react';
+import { useLoaderData, useRouteError } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
-const ServiceParametres = () => {
-  const [nomService, setNomService] = useState('Gestion des Matériels FCE');
-  const [emailContact, setEmailContact] = useState('contact@fce.mg');
-  const [telephone, setTelephone] = useState('+261 34 12 345 67');
-  const [siteWeb, setSiteWeb] = useState('');
-  const [adresse, setAdresse] = useState('Fianarantsoa, Madagascar');
-  const [couleurPrincipale, setCouleurPrincipale] = useState('#2563eb');
+// ─── Cache mémoire ───
+let parametresCache = null;
+let parametresCacheTime = 0;
+const CACHE_TTL_MS = 15000;
 
-  const handleSubmit = (e) => {
+async function fetchParametresData() {
+  const now = Date.now();
+  if (parametresCache && now - parametresCacheTime < CACHE_TTL_MS) {
+    return parametresCache;
+  }
+
+  const [{ data: userData }] = await Promise.all([
+    api.get('/accounts/users/me/'),
+  ]);
+
+  const result = { user: userData };
+  parametresCache = result;
+  parametresCacheTime = now;
+  return result;
+}
+
+// ─── Loader ───
+export async function serviceParametresLoader() {
+  return fetchParametresData();
+}
+
+// ─── ErrorElement ───
+export function ServiceParametresError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement des paramètres:', error);
+  return (
+    <div className="parametres-body">
+      <div className="app">
+        <Sidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh', flexDirection: 'column' }}>
+          <h2 style={{ color: 'red' }}>Erreur</h2>
+          <p>Impossible de charger les données. Veuillez réessayer.</p>
+          <button className="btn-sm primary" onClick={() => window.location.reload()}>Réessayer</button>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── Composant principal ───
+const ServiceParametres = () => {
+  const { user: initialUser } = useLoaderData();
+
+  // ─── États du formulaire ───
+  const [nom, setNom] = useState(initialUser?.nom || '');
+  const [prenom, setPrenom] = useState(initialUser?.prenom || '');
+  const [email, setEmail] = useState(initialUser?.email || '');
+  const [telephone, setTelephone] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [updateSuccess, setUpdateSuccess] = useState('');
+  const [updateError, setUpdateError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // ─── Handlers ───
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    alert('Paramètres enregistrés avec succès !');
+    setUpdateError('');
+    setUpdateSuccess('');
+    setIsSubmitting(true);
+
+    // Vérifier que les mots de passe correspondent si un nouveau mot de passe est saisi
+    if (newPassword && newPassword !== confirmPassword) {
+      setUpdateError('Les mots de passe ne correspondent pas');
+      setIsSubmitting(false);
+      return;
+    }
+
+    try {
+      // 1. Mettre à jour le profil (nom, prénom, email)
+      const payload = { nom, prenom, email };
+      await api.patch(`/accounts/users/${initialUser.id}/`, payload);
+
+      // 2. Changer le mot de passe si demandé
+      if (newPassword && currentPassword) {
+        // Endpoint à créer sur le backend si ce n'est pas déjà fait
+        // On suppose qu'il existe un endpoint /api/accounts/change-password/
+        await api.post('/accounts/change-password/', {
+          old_password: currentPassword,
+          new_password: newPassword,
+        });
+        // Réinitialiser les champs de mot de passe
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+      }
+
+      setUpdateSuccess('✅ Profil mis à jour avec succès !');
+
+      // Mettre à jour l'utilisateur dans le cache local
+      initialUser.nom = nom;
+      initialUser.prenom = prenom;
+      initialUser.email = email;
+
+    } catch (err) {
+      console.error(err);
+      const msg = err.response?.data?.detail || err.response?.data?.message || 'Erreur lors de la mise à jour du profil';
+      setUpdateError(`❌ ${msg}`);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -40,8 +138,6 @@ const ServiceParametres = () => {
           padding: 0 !important;
         }
 
-        @import url('https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap');
-
         .parametres-body {
           font-family: 'Inter', sans-serif;
           background: url(${backgroundImage}) center / cover no-repeat fixed;
@@ -67,7 +163,6 @@ const ServiceParametres = () => {
           min-height: 100vh;
         }
 
-        /* ─── Sidebar fixe ─── */
         .sidebar {
           position: fixed;
           top: 0;
@@ -87,7 +182,6 @@ const ServiceParametres = () => {
           z-index: 100;
         }
 
-        /* ─── Contenu principal avec marge ─── */
         .main {
           flex: 1;
           padding: 28px 36px;
@@ -248,8 +342,7 @@ const ServiceParametres = () => {
           letter-spacing: 0.05em;
           color: #475569;
         }
-        .form-grid .field input,
-        .form-grid .field textarea {
+        .form-grid .field input {
           padding: 10px 14px;
           border-radius: 10px;
           border: 1.5px solid #e2e8f0;
@@ -259,53 +352,19 @@ const ServiceParametres = () => {
           outline: none;
           transition: border-color 0.2s, box-shadow 0.2s;
         }
-        .form-grid .field input:focus,
-        .form-grid .field textarea:focus {
+        .form-grid .field input:focus {
           border-color: #2563eb;
           box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
         }
-        .form-grid .field textarea {
-          resize: vertical;
-          min-height: 80px;
+        .form-grid .field input:disabled {
+          background: #f1f5f9;
+          color: #64748b;
+          cursor: not-allowed;
         }
         .form-grid .field .help {
           font-size: 0.7rem;
           color: #94a3b8;
           margin-top: 2px;
-        }
-
-        .logo-upload {
-          display: flex;
-          align-items: center;
-          gap: 16px;
-          flex-wrap: wrap;
-        }
-        .logo-upload .preview {
-          width: 80px;
-          height: 80px;
-          border-radius: 12px;
-          border: 2px dashed #e2e8f0;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 2rem;
-          color: #94a3b8;
-          background: rgba(255,255,255,0.4);
-          overflow: hidden;
-        }
-        .logo-upload .preview img {
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-        }
-        .logo-upload input[type="file"] {
-          padding: 8px 12px;
-          border: 1.5px solid #e2e8f0;
-          border-radius: 10px;
-          background: rgba(255,255,255,0.6);
-          font-family: 'Inter', sans-serif;
-          font-size: 0.85rem;
-          cursor: pointer;
         }
 
         .btn-sm {
@@ -321,8 +380,6 @@ const ServiceParametres = () => {
         .btn-sm.primary:hover { background: #1d4ed8; }
         .btn-sm.success { background: #16a34a; color: #fff; }
         .btn-sm.success:hover { background: #15803d; }
-        .btn-sm.danger { background: #dc2626; color: #fff; }
-        .btn-sm.danger:hover { background: #b91c1c; }
 
         .form-actions {
           display: flex;
@@ -332,40 +389,21 @@ const ServiceParametres = () => {
           border-top: 1px solid #e2e8f0;
         }
 
-        .config-row {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 16px;
-        }
-        .config-row .config-item {
-          flex: 1;
-          min-width: 200px;
-        }
-        .config-row .config-item label {
-          font-size: 0.75rem;
-          font-weight: 600;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-          color: #475569;
-          display: block;
-          margin-bottom: 4px;
-        }
-        .config-row .config-item select {
-          padding: 8px 14px;
-          border-radius: 10px;
-          border: 1.5px solid #e2e8f0;
-          background: rgba(255,255,255,0.7);
-          font-family: 'Inter', sans-serif;
+        .success-message {
+          color: #16a34a;
+          background: #dcfce7;
+          padding: 10px 14px;
+          border-radius: 8px;
+          margin-bottom: 12px;
           font-size: 0.9rem;
-          width: 100%;
-          outline: none;
-          transition: border-color 0.2s;
         }
-        .config-row .config-item select:focus {
-          border-color: #2563eb;
-        }
-        .config-row .config-item .btn-sm {
-          width: 100%;
+        .error-message {
+          color: #dc2626;
+          background: #fee2e2;
+          padding: 10px 14px;
+          border-radius: 8px;
+          margin-bottom: 12px;
+          font-size: 0.9rem;
         }
 
         @media (max-width: 1024px) {
@@ -394,7 +432,6 @@ const ServiceParametres = () => {
           .page-header { flex-direction: column; align-items: flex-start; gap: 12px; }
           .form-grid { grid-template-columns: 1fr; }
           .form-grid .field.full { grid-column: span 1; }
-          .logo-upload { flex-direction: column; align-items: flex-start; }
         }
       `}</style>
 
@@ -407,43 +444,57 @@ const ServiceParametres = () => {
 
             <div className="page-header">
               <div>
-                <h1>Paramètres</h1>
-                <div className="sub">Configuration générale du service</div>
+                <h1>Paramètres du compte</h1>
+                <div className="sub">Modifiez vos informations personnelles</div>
               </div>
               <div className="user-badge">
-                <div className="avatar">AD</div>
+                <div className="avatar">{initialUser?.nom ? initialUser.nom[0] : 'AD'}</div>
                 <div>
-                  <div className="name">Admin</div>
-                  <div className="role">Chef Service</div>
+                  <div className="name">{initialUser?.nom || 'Admin'}</div>
+                  <div className="role">{initialUser?.role || 'Chef Service'}</div>
                 </div>
               </div>
             </div>
 
-            {/* Informations générales */}
             <div className="card">
-              <h3>⚙️ Informations générales</h3>
+              <h3>👤 Modifier mon profil</h3>
+
+              {updateSuccess && <div className="success-message">{updateSuccess}</div>}
+              {updateError && <div className="error-message">{updateError}</div>}
+
               <form onSubmit={handleSubmit}>
                 <div className="form-grid">
                   <div className="field">
-                    <label htmlFor="nom_service">Nom du service</label>
+                    <label htmlFor="nom">Nom</label>
                     <input
                       type="text"
-                      id="nom_service"
-                      value={nomService}
-                      onChange={(e) => setNomService(e.target.value)}
+                      id="nom"
+                      value={nom}
+                      onChange={(e) => setNom(e.target.value)}
+                      required
                     />
                   </div>
-
                   <div className="field">
-                    <label htmlFor="email_contact">Email de contact</label>
+                    <label htmlFor="prenom">Prénom</label>
+                    <input
+                      type="text"
+                      id="prenom"
+                      value={prenom}
+                      onChange={(e) => setPrenom(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="email">Email / Nom d'utilisateur</label>
                     <input
                       type="email"
-                      id="email_contact"
-                      value={emailContact}
-                      onChange={(e) => setEmailContact(e.target.value)}
+                      id="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      required
                     />
+                    <span className="help">L'email vous sert d'identifiant pour la connexion.</span>
                   </div>
-
                   <div className="field">
                     <label htmlFor="telephone">Téléphone</label>
                     <input
@@ -451,113 +502,65 @@ const ServiceParametres = () => {
                       id="telephone"
                       value={telephone}
                       onChange={(e) => setTelephone(e.target.value)}
+                      placeholder="+261 XX XXX XX XX"
                     />
                   </div>
+                  <div className="field full">
+                    <label htmlFor="role">Rôle</label>
+                    <input type="text" id="role" value={initialUser?.role || 'ADMIN'} disabled />
+                    <span className="help">Le rôle ne peut pas être modifié ici.</span>
+                  </div>
+                  <div className="field full">
+                    <label htmlFor="statut">Statut du compte</label>
+                    <input type="text" id="statut" value={initialUser?.statut || 'ACTIF'} disabled />
+                  </div>
 
+                  {/* ─── Changement de mot de passe ─── */}
+                  <div className="field full">
+                    <hr style={{ margin: '8px 0', borderColor: '#e2e8f0' }} />
+                    <label style={{ fontSize: '1rem', textTransform: 'none', color: '#0f172a', fontWeight: 600 }}>
+                      🔐 Changer le mot de passe
+                    </label>
+                  </div>
                   <div className="field">
-                    <label htmlFor="site_web">Site web (optionnel)</label>
+                    <label htmlFor="current_password">Mot de passe actuel</label>
                     <input
-                      type="text"
-                      id="site_web"
-                      placeholder="www.fce.mg"
-                      value={siteWeb}
-                      onChange={(e) => setSiteWeb(e.target.value)}
+                      type="password"
+                      id="current_password"
+                      placeholder="••••••••"
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
                     />
                   </div>
-
-                  <div className="field full">
-                    <label htmlFor="adresse">Adresse</label>
-                    <textarea
-                      id="adresse"
-                      rows="2"
-                      value={adresse}
-                      onChange={(e) => setAdresse(e.target.value)}
-                    ></textarea>
+                  <div className="field">
+                    <label htmlFor="new_password">Nouveau mot de passe</label>
+                    <input
+                      type="password"
+                      id="new_password"
+                      placeholder="••••••••"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                    />
                   </div>
-
                   <div className="field full">
-                    <label>Logo du service</label>
-                    <div className="logo-upload">
-                      <div className="preview">
-                        <span>📷</span>
-                      </div>
-                      <input type="file" accept="image/*" />
-                      <span className="help">Format PNG ou JPG, max 2 Mo</span>
-                    </div>
-                  </div>
-
-                  <div className="field full">
-                    <label htmlFor="couleur_principale">Couleur principale (optionnel)</label>
-                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                      <input
-                        type="color"
-                        id="couleur_principale"
-                        value={couleurPrincipale}
-                        onChange={(e) => setCouleurPrincipale(e.target.value)}
-                        style={{
-                          width: '50px',
-                          height: '40px',
-                          padding: '2px',
-                          border: '1px solid #e2e8f0',
-                          borderRadius: '8px',
-                          cursor: 'pointer'
-                        }}
-                      />
-                      <span style={{ fontSize: '0.85rem', color: '#475569' }}>{couleurPrincipale}</span>
-                    </div>
-                    <span className="help">Cette couleur sera utilisée pour les boutons et les accents de l'interface.</span>
+                    <label htmlFor="confirm_password">Confirmer le nouveau mot de passe</label>
+                    <input
+                      type="password"
+                      id="confirm_password"
+                      placeholder="••••••••"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                    />
+                    <span className="help">Laissez les champs de mot de passe vides pour ne pas le modifier.</span>
                   </div>
                 </div>
 
                 <div className="form-actions">
-                  <button type="submit" className="btn-sm primary" style={{ padding: '10px 28px' }}>
-                    💾 Enregistrer les modifications
-                  </button>
-                  <button
-                    type="reset"
-                    className="btn-sm"
-                    style={{ background: '#f1f5f9', color: '#475569', padding: '10px 20px' }}
-                    onClick={() => {
-                      setNomService('Gestion des Matériels FCE');
-                      setEmailContact('contact@fce.mg');
-                      setTelephone('+261 34 12 345 67');
-                      setSiteWeb('');
-                      setAdresse('Fianarantsoa, Madagascar');
-                      setCouleurPrincipale('#2563eb');
-                    }}
-                  >
-                    Annuler
+                  <button type="submit" className="btn-sm primary" style={{ padding: '10px 28px' }} disabled={isSubmitting}>
+                    {isSubmitting ? 'Enregistrement...' : '💾 Mettre à jour le profil'}
                   </button>
                 </div>
               </form>
-            </div>
-
-            {/* Sécurité & maintenance */}
-            <div className="card">
-              <h3>🔐 Sécurité & maintenance</h3>
-              <div className="config-row">
-                <div className="config-item">
-                  <label htmlFor="nettoyage_logs">Nettoyage des logs</label>
-                  <select id="nettoyage_logs">
-                    <option>Conserver 30 jours</option>
-                    <option>Conserver 90 jours</option>
-                    <option>Conserver 1 an</option>
-                  </select>
-                </div>
-                <div className="config-item">
-                  <label htmlFor="sauvegarde">Sauvegarde automatique</label>
-                  <select id="sauvegarde">
-                    <option>Quotidienne</option>
-                    <option>Hebdomadaire</option>
-                    <option>Mensuelle</option>
-                  </select>
-                </div>
-                <div className="config-item" style={{ display: 'flex', alignItems: 'flex-end' }}>
-                  <button className="btn-sm danger" style={{ padding: '8px 20px', width: '100%' }}>
-                    🗑️ Vider le cache
-                  </button>
-                </div>
-              </div>
             </div>
 
           </main>
