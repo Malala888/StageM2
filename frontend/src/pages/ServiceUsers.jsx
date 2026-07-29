@@ -146,7 +146,6 @@ const ServiceUsers = () => {
     try {
       await api.delete(`/accounts/users/${id}/`);
       alert('✅ Utilisateur supprimé');
-      // Recharger les données (on pourrait rafraîchir le cache)
       window.location.reload();
     } catch (err) {
       alert('❌ Erreur lors de la suppression');
@@ -163,8 +162,15 @@ const ServiceUsers = () => {
     }
   };
 
-  const handleReject = (nom) => {
-    alert(`❌ Rejeter : ${nom}`);
+  const handleReject = async (id, nom) => {
+    if (!confirm(`Rejeter ${nom} ?`)) return;
+    try {
+      await api.patch(`/accounts/users/${id}/rejeter/`);
+      alert(`❌ ${nom} rejeté`);
+      window.location.reload();
+    } catch (err) {
+      alert('❌ Erreur lors du rejet');
+    }
   };
 
   const handleAddSection = () => {
@@ -718,7 +724,7 @@ const ServiceUsers = () => {
                               {u.statut === 'EN_ATTENTE' && (
                                 <>
                                   <button className="btn-sm success" onClick={() => handleValidate(u.id, `${u.nom} ${u.prenom}`)}>Valider</button>
-                                  <button className="btn-sm danger" onClick={() => handleReject(`${u.nom} ${u.prenom}`)}>Rejeter</button>
+                                  <button className="btn-sm danger" onClick={() => handleReject(u.id, `${u.nom} ${u.prenom}`)}>Rejeter</button>
                                 </>
                               )}
                               <button className="btn-sm outline" onClick={() => handleEdit(`${u.nom} ${u.prenom}`)}>✏️</button>

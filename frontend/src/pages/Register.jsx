@@ -1,25 +1,63 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
 const Register = () => {
+  const navigate = useNavigate();
+
   // ─── States ───
-  const [lastname, setLastname] = useState('');
-  const [firstname, setFirstname] = useState('');
+  const [nom, setNom] = useState('');
+  const [prenom, setPrenom] = useState('');
   const [email, setEmail] = useState('');
-  const [poste, setPoste] = useState('');
+  const [role, setRole] = useState('');
+  const [section, setSection] = useState('');
   const [brigade, setBrigade] = useState('');
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+  const [submitSuccess, setSubmitSuccess] = useState('');
+
+  // ─── Données dynamiques ───
+  const [sections, setSections] = useState([]);
+  const [brigades, setBrigades] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // ─── Force du mot de passe ───
   const [strength, setStrength] = useState(0);
   const [strengthLabel, setStrengthLabel] = useState('');
-  const [matchMessage, setMatchMessage] = useState('');
-
-  // ─── Références pour les barres de force ───
   const s1Ref = useRef(null);
   const s2Ref = useRef(null);
   const s3Ref = useRef(null);
   const s4Ref = useRef(null);
+  const [matchMessage, setMatchMessage] = useState('');
+
+  // ─── Charger les sections et brigades ───
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [sectionsRes, brigadesRes] = await Promise.all([
+          axios.get('http://127.0.0.1:8000/api/personnel/sections/'),
+          axios.get('http://127.0.0.1:8000/api/personnel/brigades/'),
+        ]);
+        setSections(sectionsRes.data);
+        setBrigades(brigadesRes.data);
+      } catch (err) {
+        console.error('Erreur de chargement des données:', err);
+        // On peut utiliser des données par défaut si nécessaire
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
+
+  // ─── Brigades filtrées par section ───
+  const filteredBrigades = section
+    ? brigades.filter(b => b.section === parseInt(section))
+    : [];
 
   // ─── Fonctions ───
   const checkStrength = (value) => {
@@ -32,7 +70,6 @@ const Register = () => {
     const levels = ['Très faible', 'Faible', 'Moyen', 'Fort'];
     const colors = ['#ef4444', '#f97316', '#eab308', '#22c55e'];
     setStrengthLabel(score > 0 ? levels[score - 1] : '');
-    // Mettre à jour les barres
     const bars = [s1Ref.current, s2Ref.current, s3Ref.current, s4Ref.current];
     bars.forEach((bar, i) => {
       if (bar) {
@@ -41,64 +78,102 @@ const Register = () => {
     });
   };
 
-  const checkPasswordMatch = () => {
-    const pwd = password;
-    const confirm = passwordConfirm;
-    if (!confirm) {
-      setMatchMessage('');
-      return;
-    }
-    if (pwd === confirm) {
-      setMatchMessage('✓ Les mots de passe correspondent');
-      setMatchMessage((prev) => prev);
-      document.getElementById('matchMessage').style.color = '#22c55e';
-    } else {
-      setMatchMessage('✗ Les mots de passe ne correspondent pas');
-      document.getElementById('matchMessage').style.color = '#ef4444';
-    }
-  };
-
   const handlePasswordChange = (e) => {
     const value = e.target.value;
     setPassword(value);
     checkStrength(value);
-    checkPasswordMatch();
+    if (passwordConfirm) {
+      setMatchMessage(value === passwordConfirm);
+    }
   };
 
   const handlePasswordConfirmChange = (e) => {
     const value = e.target.value;
     setPasswordConfirm(value);
-    checkPasswordMatch();
+    setMatchMessage(password === value);
   };
 
   const togglePassword = () => setShowPassword(!showPassword);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    setSubmitError('');
+    setSubmitSuccess('');
+    setIsSubmitting(true);
 
-    if (password !== passwordConfirm) {
-      setMatchMessage('✗ Les mots de passe ne correspondent pas');
-      document.getElementById('matchMessage').style.color = '#ef4444';
+    if (!role) {
+      setSubmitError('❌ Veuillez sélectionner un poste');
+      setIsSubmitting(false);
       return;
     }
 
-    const btn = document.getElementById('submitBtn');
-    const originalText = btn.textContent;
-    btn.textContent = '✓ Compte créé ! En attente de validation';
-    btn.style.background = '#16a34a';
-    btn.style.boxShadow = '0 8px 20px -8px rgba(22, 163, 74, 0.5)';
+    if (password !== passwordConfirm) {
+      setSubmitError('Les mots de passe ne correspondent pas');
+      setIsSubmitting(false);
+      return;
+    }
 
-    setTimeout(() => {
-      btn.textContent = originalText;
-      btn.style.background = '';
-      btn.style.boxShadow = '';
-    }, 3000);
+    if (password.length < 8) {
+      setSubmitError('Le mot de passe doit contenir au moins 8 caractères');
+      setIsSubmitting(false);
+      return;
+    }
+
+    const payload = {
+      nom,
+      prenom,
+      email,
+      role,
+      section: (role === 'CHEF_SECTION' && section) ? parseInt(section) : null,
+      brigade: (role !== 'CHEF_SECTION' && brigade) ? parseInt(brigade) : null,
+      password,
+    };
+
+    try {
+      await axios.post('http://127.0.0.1:8000/api/accounts/users/', payload);
+      setSubmitSuccess('✅ Votre compte a été créé avec succès ! En attente de validation par votre supérieur.');
+      setNom('');
+      setPrenom('');
+      setEmail('');
+      setRole('');
+      setSection('');
+      setBrigade('');
+      setPassword('');
+      setPasswordConfirm('');
+      setMatchMessage('');
+      setStrength(0);
+      setStrengthLabel('');
+      const bars = [s1Ref.current, s2Ref.current, s3Ref.current, s4Ref.current];
+      bars.forEach(bar => { if (bar) bar.style.background = '#e2e8f0'; });
+      setTimeout(() => navigate('/'), 4000);
+    } catch (err) {
+      console.error(err);
+      const errorData = err.response?.data;
+      let errorMsg = 'Erreur lors de la création du compte';
+      if (errorData) {
+        if (typeof errorData === 'string') {
+          errorMsg = errorData;
+        } else if (typeof errorData === 'object') {
+          errorMsg = Object.entries(errorData)
+            .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`)
+            .join(' | ');
+        }
+      }
+      setSubmitError(`❌ ${errorMsg}`);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  // ─── Effet pour initialiser la date ───
-  useEffect(() => {
-    // Pas de date dans ce formulaire, mais on garde pour cohérence
-  }, []);
+  if (loading) {
+    return (
+      <div className="register-body">
+        <div className="card" style={{ textAlign: 'center', padding: '40px' }}>
+          <p>Chargement du formulaire...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -115,7 +190,6 @@ const Register = () => {
           overflow-y: auto;
         }
 
-        /* ─── Forcer le centrage ─── */
         #root {
           width: 100% !important;
           max-width: 100% !important;
@@ -191,9 +265,7 @@ const Register = () => {
           display: flex;
           gap: 12px;
         }
-        .field-group .field {
-          flex: 1;
-        }
+        .field-group .field { flex: 1; }
 
         .field {
           display: flex;
@@ -227,9 +299,7 @@ const Register = () => {
           pointer-events: none;
           transition: stroke 0.2s;
         }
-        .input-wrap:focus-within .ico {
-          stroke: #2563eb;
-        }
+        .input-wrap:focus-within .ico { stroke: #2563eb; }
 
         input[type="text"],
         input[type="email"],
@@ -255,16 +325,12 @@ const Register = () => {
           background-position: right 16px center;
           cursor: pointer;
         }
-        input::placeholder {
-          color: #94a3b8;
-        }
-        input:hover,
-        select:hover {
+        input::placeholder { color: #94a3b8; }
+        input:hover, select:hover {
           border-color: #94a3b8;
           background: #ffffff;
         }
-        input:focus,
-        select:focus {
+        input:focus, select:focus {
           border-color: #2563eb;
           background: #ffffff;
           box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
@@ -283,9 +349,7 @@ const Register = () => {
           color: #94a3b8;
           transition: color 0.2s;
         }
-        .toggle-pwd:hover {
-          color: #0f172a;
-        }
+        .toggle-pwd:hover { color: #0f172a; }
         .toggle-pwd svg {
           width: 20px;
           height: 20px;
@@ -325,6 +389,23 @@ const Register = () => {
           margin-top: 3px;
           transition: color 0.25s;
         }
+        .match-message.valid { color: #22c55e; }
+        .match-message.invalid { color: #ef4444; }
+
+        .submit-message {
+          padding: 10px 14px;
+          border-radius: 8px;
+          font-size: 0.9rem;
+          font-weight: 500;
+        }
+        .submit-message.success {
+          background: #dcfce7;
+          color: #16a34a;
+        }
+        .submit-message.error {
+          background: #fee2e2;
+          color: #dc2626;
+        }
 
         .btn-primary {
           margin-top: 4px;
@@ -354,8 +435,10 @@ const Register = () => {
           transform: translateY(-1px);
           box-shadow: 0 12px 28px -8px rgba(37, 99, 235, 0.4);
         }
-        .btn-primary:active {
-          transform: translateY(0);
+        .btn-primary:active { transform: translateY(0); }
+        .btn-primary:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
         }
 
         .divider {
@@ -416,26 +499,17 @@ const Register = () => {
           text-decoration: none;
           font-weight: 600;
         }
-        .footer-text a:hover {
-          text-decoration: underline;
-        }
+        .footer-text a:hover { text-decoration: underline; }
 
         @media (max-width: 480px) {
-          .register-body {
-            padding: 16px 12px;
-          }
+          .register-body { padding: 16px 12px; }
           .card {
             padding: 20px 18px 24px;
             border-radius: 18px;
             max-width: 100%;
           }
-          .card-title {
-            font-size: 1.6rem;
-          }
-          .field-group {
-            flex-direction: column;
-            gap: 0;
-          }
+          .card-title { font-size: 1.6rem; }
+          .field-group { flex-direction: column; gap: 0; }
           input[type="text"],
           input[type="email"],
           input[type="password"],
@@ -443,15 +517,8 @@ const Register = () => {
             padding: 10px 14px 10px 40px;
             font-size: 0.85rem;
           }
-          .input-wrap .ico {
-            left: 12px;
-            width: 17px;
-            height: 17px;
-          }
-          .toggle-pwd svg {
-            width: 17px;
-            height: 17px;
-          }
+          .input-wrap .ico { left: 12px; width: 17px; height: 17px; }
+          .toggle-pwd svg { width: 17px; height: 17px; }
         }
 
         @media (prefers-reduced-motion: reduce) {
@@ -467,12 +534,13 @@ const Register = () => {
           <h1 className="card-title">Inscription</h1>
           <p className="card-sub">Créez votre compte pour accéder à l'application</p>
 
-          <form onSubmit={handleSubmit} noValidate>
+          {submitSuccess && <div className="submit-message success">{submitSuccess}</div>}
+          {submitError && <div className="submit-message error">{submitError}</div>}
 
-            {/* Nom & Prénom */}
+          <form onSubmit={handleSubmit} noValidate>
             <div className="field-group">
               <div className="field">
-                <label className="field-label" htmlFor="lastname">Nom</label>
+                <label className="field-label" htmlFor="nom">Nom</label>
                 <div className="input-wrap">
                   <svg className="ico" viewBox="0 0 24 24">
                     <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
@@ -480,16 +548,16 @@ const Register = () => {
                   </svg>
                   <input
                     type="text"
-                    id="lastname"
+                    id="nom"
                     placeholder="Dupont"
-                    value={lastname}
-                    onChange={(e) => setLastname(e.target.value)}
+                    value={nom}
+                    onChange={(e) => setNom(e.target.value)}
                     required
                   />
                 </div>
               </div>
               <div className="field">
-                <label className="field-label" htmlFor="firstname">Prénom</label>
+                <label className="field-label" htmlFor="prenom">Prénom</label>
                 <div className="input-wrap">
                   <svg className="ico" viewBox="0 0 24 24">
                     <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
@@ -497,17 +565,16 @@ const Register = () => {
                   </svg>
                   <input
                     type="text"
-                    id="firstname"
+                    id="prenom"
                     placeholder="Jean"
-                    value={firstname}
-                    onChange={(e) => setFirstname(e.target.value)}
+                    value={prenom}
+                    onChange={(e) => setPrenom(e.target.value)}
                     required
                   />
                 </div>
               </div>
             </div>
 
-            {/* Email */}
             <div className="field">
               <label className="field-label" htmlFor="email">Adresse email</label>
               <div className="input-wrap">
@@ -518,7 +585,7 @@ const Register = () => {
                 <input
                   type="email"
                   id="email"
-                  placeholder="jean.dupont@email.com"
+                  placeholder="jean.dupont@fce.mg"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
@@ -526,53 +593,98 @@ const Register = () => {
               </div>
             </div>
 
-            {/* Poste */}
             <div className="field">
-              <label className="field-label" htmlFor="poste">Poste / Rôle</label>
+              <label className="field-label" htmlFor="role">Poste / Rôle</label>
               <div className="input-wrap">
                 <svg className="ico" viewBox="0 0 24 24">
                   <rect x="2" y="7" width="20" height="14" rx="2" />
                   <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
                 </svg>
                 <select
-                  id="poste"
-                  value={poste}
-                  onChange={(e) => setPoste(e.target.value)}
+                  id="role"
+                  value={role}
+                  onChange={(e) => setRole(e.target.value)}
                   required
                 >
                   <option value="">Sélectionnez votre poste</option>
-                  <option value="CHEF_SECTION">CHEF_SECTION – Chef de Section</option>
-                  <option value="CHEF_BRIGADE">CHEF_BRIGADE – Chef de Brigade</option>
                   <option value="GL">GL – Garde Ligne</option>
                   <option value="CN">CN – Cantonnier</option>
+                  <option value="CHEF_BRIGADE">CHEF_BRIGADE – Chef de Brigade</option>
+                  <option value="CHEF_SECTION">CHEF_SECTION – Chef de Section</option>
                 </select>
               </div>
             </div>
 
-            {/* Brigade */}
-            <div className="field">
-              <label className="field-label" htmlFor="brigade">Brigade</label>
-              <div className="input-wrap">
-                <svg className="ico" viewBox="0 0 24 24">
-                  <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
-                  <circle cx="12" cy="10" r="3" />
-                </svg>
-                <select
-                  id="brigade"
-                  value={brigade}
-                  onChange={(e) => setBrigade(e.target.value)}
-                  required
-                >
-                  <option value="">Sélectionnez votre brigade</option>
-                  <option value="BOA">BOA – Base Opérationnelle d'Attente</option>
-                  <option value="BR FI">BR FI – Brigade Régionale Fianarantsoa</option>
-                  <option value="BR ADV">BR ADV – Brigade Régionale Andovoka</option>
-                  <option value="BR TLG">BR TLG – Brigade Régionale Talata</option>
-                </select>
+            {role === 'CHEF_SECTION' && (
+              <div className="field">
+                <label className="field-label" htmlFor="section">Section</label>
+                <div className="input-wrap">
+                  <svg className="ico" viewBox="0 0 24 24">
+                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+                    <circle cx="12" cy="10" r="3" />
+                  </svg>
+                  <select
+                    id="section"
+                    value={section}
+                    onChange={(e) => setSection(e.target.value)}
+                    required
+                  >
+                    <option value="">Sélectionnez votre section</option>
+                    {sections.map(s => (
+                      <option key={s.id} value={s.id}>{s.nom}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
-            </div>
+            )}
 
-            {/* Mot de passe */}
+            {role && role !== 'CHEF_SECTION' && (
+              <>
+                <div className="field">
+                  <label className="field-label" htmlFor="section">Section</label>
+                  <div className="input-wrap">
+                    <svg className="ico" viewBox="0 0 24 24">
+                      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+                      <circle cx="12" cy="10" r="3" />
+                    </svg>
+                    <select
+                      id="section"
+                      value={section}
+                      onChange={(e) => setSection(e.target.value)}
+                      required
+                    >
+                      <option value="">Sélectionnez votre section</option>
+                      {sections.map(s => (
+                        <option key={s.id} value={s.id}>{s.nom}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="field">
+                  <label className="field-label" htmlFor="brigade">Brigade</label>
+                  <div className="input-wrap">
+                    <svg className="ico" viewBox="0 0 24 24">
+                      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+                      <circle cx="12" cy="10" r="3" />
+                    </svg>
+                    <select
+                      id="brigade"
+                      value={brigade}
+                      onChange={(e) => setBrigade(e.target.value)}
+                      required
+                      disabled={!section}
+                    >
+                      <option value="">Sélectionnez votre brigade</option>
+                      {filteredBrigades.map(b => (
+                        <option key={b.id} value={b.id}>{b.nom} ({b.code})</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </>
+            )}
+
             <div className="field">
               <label className="field-label" htmlFor="password">Mot de passe</label>
               <div className="input-wrap">
@@ -587,13 +699,9 @@ const Register = () => {
                   value={password}
                   onChange={handlePasswordChange}
                   required
+                  minLength="8"
                 />
-                <button
-                  type="button"
-                  className="toggle-pwd"
-                  onClick={togglePassword}
-                  aria-label="Afficher/masquer"
-                >
+                <button type="button" className="toggle-pwd" onClick={togglePassword}>
                   <svg viewBox="0 0 24 24">
                     {showPassword ? (
                       <>
@@ -611,15 +719,14 @@ const Register = () => {
                 </button>
               </div>
               <div className="strength-bar">
-                <span ref={s1Ref} id="s1"></span>
-                <span ref={s2Ref} id="s2"></span>
-                <span ref={s3Ref} id="s3"></span>
-                <span ref={s4Ref} id="s4"></span>
+                <span ref={s1Ref}></span>
+                <span ref={s2Ref}></span>
+                <span ref={s3Ref}></span>
+                <span ref={s4Ref}></span>
               </div>
-              <div className="strength-label" id="strengthLabel">{strengthLabel}</div>
+              <div className="strength-label">{strengthLabel}</div>
             </div>
 
-            {/* Confirmation */}
             <div className="field">
               <label className="field-label" htmlFor="password_confirm">Confirmer le mot de passe</label>
               <div className="input-wrap">
@@ -636,15 +743,17 @@ const Register = () => {
                   required
                 />
               </div>
-              <div className="match-message" id="matchMessage">{matchMessage}</div>
+              <div className={`match-message ${matchMessage ? 'valid' : passwordConfirm ? 'invalid' : ''}`}>
+                {passwordConfirm && (matchMessage ? '✓ Les mots de passe correspondent' : '✗ Les mots de passe ne correspondent pas')}
+              </div>
             </div>
 
-            <button type="submit" className="btn-primary" id="submitBtn">Créer mon compte</button>
-
+            <button type="submit" className="btn-primary" disabled={isSubmitting}>
+              {isSubmitting ? 'Création en cours...' : 'Créer mon compte'}
+            </button>
           </form>
 
           <div className="divider">ou</div>
-
           <button className="btn-google" type="button">
             <svg viewBox="0 0 24 24" fill="none">
               <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />

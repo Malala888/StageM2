@@ -629,15 +629,42 @@ const ServiceDashboard = () => {
                   </thead>
                   <tbody>
                     {comptesEnAttente.length > 0 ? (
-                      comptesEnAttente.map((user) => (
-                        <tr key={user.id}>
-                          <td>{user.nom} {user.prenom}</td>
-                          <td>{user.email}</td>
-                          <td>{user.role}</td>
-                          <td>{user.brigade?.nom || 'N/A'}</td>
+                      comptesEnAttente.map((u) => (
+                        <tr key={u.id}>
+                          <td>{u.nom} {u.prenom}</td>
+                          <td>{u.email}</td>
+                          <td>{u.role}</td>
+                          <td>{u.brigade?.nom || 'N/A'}</td>
                           <td>
-                            <button className="btn-sm success">Valider</button>
-                            <button className="btn-sm danger">Rejeter</button>
+                            <button
+                              className="btn-sm success"
+                              onClick={async () => {
+                                try {
+                                  await api.patch(`/accounts/users/${u.id}/valider/`);
+                                  alert(`✅ ${u.nom} ${u.prenom} validé`);
+                                  window.location.reload();
+                                } catch (err) {
+                                  alert('❌ Erreur lors de la validation');
+                                }
+                              }}
+                            >
+                              Valider
+                            </button>
+                            <button
+                              className="btn-sm danger"
+                              onClick={async () => {
+                                if (!confirm(`Rejeter ${u.nom} ${u.prenom} ?`)) return;
+                                try {
+                                  await api.patch(`/accounts/users/${u.id}/rejeter/`);
+                                  alert(`❌ ${u.nom} ${u.prenom} rejeté`);
+                                  window.location.reload();
+                                } catch (err) {
+                                  alert('❌ Erreur lors du rejet');
+                                }
+                              }}
+                            >
+                              Rejeter
+                            </button>
                           </td>
                         </tr>
                       ))

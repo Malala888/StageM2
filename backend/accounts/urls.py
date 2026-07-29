@@ -6,7 +6,7 @@ router = DefaultRouter()
 router.register(r'users', UtilisateurViewSet)
 
 urlpatterns = [
-    # La route /users/me/ doit être définie AVANT l'inclusion des routes du routeur
     path('users/me/', MeView.as_view(), name='me'),
+    path('change-password/', UtilisateurViewSet.as_view({'post': 'change_password'}), name='change-password'),
     path('', include(router.urls)),
 ]
