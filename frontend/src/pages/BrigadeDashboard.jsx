@@ -1,9 +1,126 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLoaderData, useRouteError } from 'react-router-dom';
 import BrigadeSidebar from '../components/BrigadeSidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
+// ─── Cache mémoire ───
+let brigadeDashboardCache = null;
+let brigadeDashboardCacheTime = 0;
+const CACHE_TTL_MS = 15000;
+
+async function fetchBrigadeDashboardData() {
+  const now = Date.now();
+  if (brigadeDashboardCache && now - brigadeDashboardCacheTime < CACHE_TTL_MS) {
+    return brigadeDashboardCache;
+  }
+
+  const [
+    { data: userData },
+    { data: users },
+    { data: stockData },
+    { data: mouvements },
+    { data: brigades },
+  ] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/accounts/users/'),
+    api.get('/materiaux/stock/'),
+    api.get('/materiaux/mouvements/'),
+    api.get('/personnel/brigades/'),
+  ]);
+
+  // Récupérer la brigade du chef
+  const brigadeId = userData.brigade;
+  const brigade = brigades.find(b => b.id === brigadeId);
+  const brigadeName = brigade?.nom || 'N/A';
+
+  // Utilisateurs de la brigade
+  const usersBrigade = users.filter(u => u.brigade === brigadeId);
+  const actifs = usersBrigade.filter(u => u.statut === 'ACTIF');
+  const enAttente = usersBrigade.filter(u => u.statut === 'EN_ATTENTE');
+
+  // Mouvements de la brigade
+  const mouvementsBrigade = mouvements.filter(m => m.brigade === brigadeId);
+  const derniers = mouvementsBrigade.slice(0, 5);
+  const enCours = mouvementsBrigade.filter(m => m.statut === 'EN_COURS');
+  const retards = mouvementsBrigade.filter(m => m.statut === 'EN_RETARD');
+
+  // Stock total (on prend tout le stock, car les matériels ne sont pas liés à une brigade)
+  // On pourrait filtrer par les matériels utilisés dans la brigade via les mouvements, mais on garde global.
+  const totalStock = stockData.reduce((acc, item) => acc + item.quantite, 0);
+
+  // Activités récentes
+  const activitesList = derniers.map((m, index) => ({
+    id: m.id || index,
+    type: m.type,
+    materiel: m.materiel ? m.materiel.nom : 'Matériel',
+    agent: m.agent_concerner ? `${m.agent_concerner.nom} ${m.agent_concerner.prenom}` : 'Système',
+    date: new Date(m.date_mouvement).toLocaleDateString('fr-FR'),
+    statut: m.statut,
+  }));
+
+  const result = {
+    user: userData,
+    brigade: brigade,
+    brigadeName,
+    stats: {
+      agentsActifs: actifs.length,
+      totalAgents: usersBrigade.length,
+      stockTotal: totalStock,
+      empruntsEnCours: enCours.length,
+      retards: retards.length,
+    },
+    derniersMouvements: derniers,
+    activites: activitesList,
+    comptesEnAttente: enAttente,
+  };
+
+  brigadeDashboardCache = result;
+  brigadeDashboardCacheTime = now;
+  return result;
+}
+
+// ─── Loader ───
+export async function brigadeDashboardLoader() {
+  return fetchBrigadeDashboardData();
+}
+
+// ─── ErrorElement ───
+export function BrigadeDashboardError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement du tableau de bord brigade:', error);
+  return (
+    <div className="dashboard-body">
+      <div className="app">
+        <BrigadeSidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}>
+          <div style={{ color: 'red', textAlign: 'center' }}>
+            <h2>Erreur</h2>
+            <p>Impossible de charger les données. Veuillez réessayer.</p>
+            <button onClick={() => window.location.reload()} className="btn-sm primary">Réessayer</button>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── Composant principal ───
 const BrigadeDashboard = () => {
+  const { user, brigade, brigadeName, stats, derniersMouvements, activites, comptesEnAttente } = useLoaderData();
+
+  // Fonction de validation hiérarchique (Chef de Brigade peut valider GL et CN de sa brigade)
+  const canValidate = (targetUser) => {
+    if (!user) return false;
+    if (user.role === 'ADMIN') return true;
+    if (user.role === 'CHEF_BRIGADE') {
+      if (!user.brigade) return false;
+      if (!['GL', 'CN'].includes(targetUser.role)) return false;
+      return targetUser.brigade === user.brigade;
+    }
+    return false;
+  };
+
   return (
     <>
       <style>{`
@@ -324,66 +441,55 @@ const BrigadeDashboard = () => {
               <div>
                 <h1>Tableau de bord</h1>
                 <div className="sub">
-                  Bienvenue, Chef de Brigade — Brigade <span className="brigade-badge">BR FI</span>
+                  Bienvenue, {user?.nom || 'Chef'} {user?.prenom || 'Brigade'} — Brigade <span className="brigade-badge">{brigadeName}</span>
                 </div>
               </div>
               <div className="user-badge">
-                <div className="avatar">CB</div>
+                <div className="avatar">{user?.nom ? user.nom[0] : 'CB'}</div>
                 <div>
-                  <div className="name">Chef Brigade</div>
+                  <div className="name">{user?.nom || 'Chef'}</div>
                   <div className="role">Chef de Brigade</div>
                 </div>
               </div>
             </div>
 
+            {/* Widgets */}
             <div className="widget-grid">
               <div className="widget">
                 <div className="icon">
-                  <svg viewBox="0 0 24 24">
-                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                    <circle cx="9" cy="7" r="4" />
-                    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-                  </svg>
+                  <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                 </div>
                 <div className="label">Agents actifs</div>
-                <div className="value">18 <small>/ 20</small></div>
-                <span className="change">+2 ce mois</span>
+                <div className="value">{stats.agentsActifs} <small>/ {stats.totalAgents}</small></div>
+                <span className="change">+{stats.agentsActifs} actifs</span>
               </div>
               <div className="widget">
                 <div className="icon">
-                  <svg viewBox="0 0 24 24">
-                    <rect x="2" y="7" width="20" height="14" rx="2" />
-                    <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
-                  </svg>
+                  <svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
                 </div>
                 <div className="label">Matériels en stock</div>
-                <div className="value">187</div>
-                <span className="change">+5 ce mois</span>
+                <div className="value">{stats.stockTotal}</div>
+                <span className="change">Total unités</span>
               </div>
               <div className="widget">
                 <div className="icon">
-                  <svg viewBox="0 0 24 24">
-                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                  </svg>
+                  <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                 </div>
                 <div className="label">En cours d'emprunt</div>
-                <div className="value">8</div>
-                <span className="change down">+2 depuis hier</span>
+                <div className="value">{stats.empruntsEnCours}</div>
+                <span className="change down">En cours</span>
               </div>
               <div className="widget">
                 <div className="icon">
-                  <svg viewBox="0 0 24 24">
-                    <circle cx="12" cy="12" r="10" />
-                    <polyline points="12 6 12 12 16 14" />
-                  </svg>
+                  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                 </div>
                 <div className="label">Retards signalés</div>
-                <div className="value">2</div>
-                <span className="change down">+1 aujourd'hui</span>
+                <div className="value">{stats.retards}</div>
+                <span className="change down">À traiter</span>
               </div>
             </div>
 
+            {/* Cards */}
             <div className="card-grid">
               <div className="card">
                 <h3>
@@ -393,38 +499,25 @@ const BrigadeDashboard = () => {
                 <div className="table-wrap">
                   <table>
                     <thead>
-                      <tr>
-                        <th>Matériel</th>
-                        <th>Type</th>
-                        <th>Agent</th>
-                        <th>Statut</th>
-                      </tr>
+                      <tr><th>Matériel</th><th>Type</th><th>Agent</th><th>Statut</th></tr>
                     </thead>
                     <tbody>
-                      <tr>
-                        <td>Pelle DS-12</td>
-                        <td>EMPRUNT</td>
-                        <td>Rakoto J.</td>
-                        <td><span className="badge yellow">En cours</span></td>
-                      </tr>
-                      <tr>
-                        <td>Brouette 45L</td>
-                        <td>RETOUR</td>
-                        <td>Ranaivo M.</td>
-                        <td><span className="badge green">Retourné</span></td>
-                      </tr>
-                      <tr>
-                        <td>Perceuse Bosh</td>
-                        <td>RÉPARATION</td>
-                        <td>Andry R.</td>
-                        <td><span className="badge blue">En réparation</span></td>
-                      </tr>
-                      <tr>
-                        <td>Échelle 6m</td>
-                        <td>EMPRUNT</td>
-                        <td>Rakotomalala</td>
-                        <td><span className="badge red">En retard</span></td>
-                      </tr>
+                      {derniersMouvements.length > 0 ? (
+                        derniersMouvements.map((mvt) => (
+                          <tr key={mvt.id}>
+                            <td>{mvt.materiel?.nom || 'N/A'}</td>
+                            <td>{mvt.type}</td>
+                            <td>{mvt.agent_concerner ? `${mvt.agent_concerner.nom} ${mvt.agent_concerner.prenom}` : 'Système'}</td>
+                            <td>
+                              <span className={`badge ${mvt.statut === 'EN_COURS' ? 'yellow' : mvt.statut === 'RETOURNE' ? 'green' : mvt.statut === 'EN_RETARD' ? 'red' : 'blue'}`}>
+                                {mvt.statut}
+                              </span>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr><td colSpan="4">Aucun mouvement récent</td></tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -432,31 +525,89 @@ const BrigadeDashboard = () => {
 
               <div className="card">
                 <h3>Activité récente</h3>
-                <div className="activity-item">
-                  <span className="dot green"></span>
-                  <span className="text">Nouvel agent : <strong>Rakoto Jean</strong></span>
-                  <span className="time">15 min</span>
-                </div>
-                <div className="activity-item">
-                  <span className="dot blue"></span>
-                  <span className="text">Emprunt enregistré : <strong>Pelle DS-12</strong></span>
-                  <span className="time">1h</span>
-                </div>
-                <div className="activity-item">
-                  <span className="dot yellow"></span>
-                  <span className="text">Seuil d'alerte : <strong>Brouettes</strong></span>
-                  <span className="time">3h</span>
-                </div>
-                <div className="activity-item">
-                  <span className="dot red"></span>
-                  <span className="text">Retard signalé : <strong>Échelle 6m</strong></span>
-                  <span className="time">5h</span>
-                </div>
-                <div className="activity-item">
-                  <span className="dot green"></span>
-                  <span className="text">Nouveau matériel : <strong>Perceuse</strong></span>
-                  <span className="time">hier</span>
-                </div>
+                {activites.length > 0 ? (
+                  activites.map((act, index) => (
+                    <div className="activity-item" key={index}>
+                      <span className={`dot ${act.statut === 'RETOURNE' ? 'green' : act.statut === 'EN_RETARD' ? 'red' : 'blue'}`}></span>
+                      <span className="text">
+                        {act.type} : <strong>{act.materiel}</strong> {act.agent !== 'Système' && `- ${act.agent}`}
+                      </span>
+                      <span className="time">{act.date}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="activity-item">Aucune activité récente</div>
+                )}
+              </div>
+            </div>
+
+            {/* Comptes en attente */}
+            <div className="card">
+              <h3>
+                Comptes en attente de validation
+                <Link to="/brigade/users">Tout valider →</Link>
+              </h3>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Nom</th><th>Email</th><th>Poste</th><th>Action</th></tr>
+                  </thead>
+                  <tbody>
+                    {comptesEnAttente.length > 0 ? (
+                      comptesEnAttente.map((targetUser) => {
+                        const canValidateUser = canValidate(targetUser);
+                        return (
+                          <tr key={targetUser.id}>
+                            <td>{targetUser.nom} {targetUser.prenom}</td>
+                            <td>{targetUser.email}</td>
+                            <td>{targetUser.role}</td>
+                            <td>
+                              {canValidateUser ? (
+                                <>
+                                  <button
+                                    className="btn-sm success"
+                                    onClick={async () => {
+                                      try {
+                                        await api.patch(`/accounts/users/${targetUser.id}/valider/`);
+                                        alert(`✅ ${targetUser.nom} ${targetUser.prenom} validé`);
+                                        window.location.reload();
+                                      } catch (err) {
+                                        console.error(err);
+                                        alert('❌ Erreur lors de la validation');
+                                      }
+                                    }}
+                                  >
+                                    Valider
+                                  </button>
+                                  <button
+                                    className="btn-sm danger"
+                                    onClick={async () => {
+                                      if (!confirm(`Rejeter ${targetUser.nom} ${targetUser.prenom} ?`)) return;
+                                      try {
+                                        await api.patch(`/accounts/users/${targetUser.id}/rejeter/`);
+                                        alert(`❌ ${targetUser.nom} ${targetUser.prenom} rejeté`);
+                                        window.location.reload();
+                                      } catch (err) {
+                                        console.error(err);
+                                        alert('❌ Erreur lors du rejet');
+                                      }
+                                    }}
+                                  >
+                                    Rejeter
+                                  </button>
+                                </>
+                              ) : (
+                                <span className="badge gray">En attente</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    ) : (
+                      <tr><td colSpan="4">Aucun compte en attente</td></tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
 

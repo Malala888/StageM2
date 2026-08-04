@@ -1,16 +1,106 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useLoaderData, useRouteError } from 'react-router-dom';
 import BrigadeSidebar from '../components/BrigadeSidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
+// ─── Cache mémoire ───
+let brigadeUsersCache = null;
+let brigadeUsersCacheTime = 0;
+const CACHE_TTL_MS = 15000;
+
+async function fetchBrigadeUsersData() {
+  const now = Date.now();
+  if (brigadeUsersCache && now - brigadeUsersCacheTime < CACHE_TTL_MS) {
+    return brigadeUsersCache;
+  }
+
+  const [
+    { data: userData },
+    { data: usersData },
+    { data: brigadesData },
+  ] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/accounts/users/'),
+    api.get('/personnel/brigades/'),
+  ]);
+
+  // Filtrer par brigade du chef de brigade
+  const brigadeId = userData.brigade;
+  const usersBrigade = usersData.filter(u => u.brigade === brigadeId);
+  const currentBrigade = brigadesData.find(b => b.id === brigadeId) || null;
+
+  const result = {
+    user: userData,
+    users: usersBrigade,
+    brigade: currentBrigade,
+  };
+
+  brigadeUsersCache = result;
+  brigadeUsersCacheTime = now;
+  return result;
+}
+
+// ─── Loader ───
+export async function brigadeUsersLoader() {
+  return fetchBrigadeUsersData();
+}
+
+// ─── ErrorElement ───
+export function BrigadeUsersError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement des utilisateurs de la brigade:', error);
+  return (
+    <div className="users-body">
+      <div className="app">
+        <BrigadeSidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh', flexDirection: 'column' }}>
+          <h2 style={{ color: 'red' }}>Erreur</h2>
+          <p>Impossible de charger les données de la brigade. Veuillez réessayer.</p>
+          <button className="btn-sm primary" onClick={() => window.location.reload()}>Réessayer</button>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── Composant principal ───
 const BrigadeUsers = () => {
-  // ─── States pour les filtres ───
+  const { user, users, brigade } = useLoaderData();
+
+  // ─── États pour les filtres ───
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [filteredUsers, setFilteredUsers] = useState(users);
+
+  // ─── Appliquer les filtres ───
+  useEffect(() => {
+    let result = users;
+
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      result = result.filter(u =>
+        u.nom.toLowerCase().includes(term) ||
+        u.prenom.toLowerCase().includes(term) ||
+        u.email.toLowerCase().includes(term)
+      );
+    }
+
+    if (roleFilter) {
+      result = result.filter(u => u.role === roleFilter);
+    }
+
+    if (statusFilter) {
+      result = result.filter(u => u.statut === statusFilter);
+    }
+
+    setFilteredUsers(result);
+  }, [searchTerm, roleFilter, statusFilter, users]);
 
   // ─── Handlers ───
-  const handleFilter = () => {
-    alert('Filtres appliqués !');
+  const handleFilter = (e) => {
+    e.preventDefault();
   };
 
   const handleReset = () => {
@@ -20,15 +110,46 @@ const BrigadeUsers = () => {
   };
 
   const handleAddUser = () => {
-    alert('➕ Ajouter un nouvel agent');
+    alert('➕ Ajouter un nouvel agent dans la brigade');
   };
 
   const handleEdit = (nom) => {
     alert(`✏️ Modifier : ${nom}`);
   };
 
-  const handleDelete = (nom) => {
-    alert(`🗑️ Supprimer : ${nom}`);
+  const handleDelete = async (id, nom) => {
+    if (!confirm(`Supprimer "${nom}" ?`)) return;
+    try {
+      await api.delete(`/accounts/users/${id}/`);
+      alert('✅ Utilisateur supprimé');
+      window.location.reload();
+    } catch (err) {
+      alert('❌ Erreur lors de la suppression');
+      console.error(err);
+    }
+  };
+
+  const handleValidate = async (id, nom) => {
+    try {
+      await api.patch(`/accounts/users/${id}/valider/`);
+      alert(`✅ ${nom} validé avec succès`);
+      window.location.reload();
+    } catch (err) {
+      alert('❌ Erreur lors de la validation');
+      console.error(err);
+    }
+  };
+
+  const handleReject = async (id, nom) => {
+    if (!confirm(`Rejeter ${nom} ?`)) return;
+    try {
+      await api.patch(`/accounts/users/${id}/rejeter/`);
+      alert(`❌ ${nom} rejeté`);
+      window.location.reload();
+    } catch (err) {
+      alert('❌ Erreur lors du rejet');
+      console.error(err);
+    }
   };
 
   return (
@@ -79,13 +200,12 @@ const BrigadeUsers = () => {
         .app {
           position: relative;
           z-index: 1;
-          display: block;          /* plus de flex, sidebar fixed */
+          display: block;
           min-height: 100vh;
         }
 
-        /* ─── Le main est décalé pour la sidebar fixed ─── */
         .main {
-          margin-left: 240px;      /* largeur de la sidebar */
+          margin-left: 240px;
           padding: 28px 36px;
           min-height: 100vh;
         }
@@ -169,6 +289,46 @@ const BrigadeUsers = () => {
           justify-content: space-between;
         }
 
+        .filters {
+          display: flex;
+          gap: 12px;
+          margin-bottom: 20px;
+          flex-wrap: wrap;
+        }
+        .filters input, .filters select {
+          padding: 8px 14px;
+          border-radius: 8px;
+          border: 1px solid rgba(203, 213, 225, 0.8);
+          background: rgba(255, 255, 255, 0.8);
+          font-size: 0.85rem;
+          outline: none;
+        }
+        .filters input:focus, .filters select:focus {
+          border-color: #2563eb;
+          background: #fff;
+        }
+
+        .btn-sm {
+          padding: 6px 12px;
+          border-radius: 6px;
+          font-size: 0.75rem;
+          font-weight: 600;
+          cursor: pointer;
+          border: none;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          transition: all 0.2s;
+        }
+        .btn-sm.primary { background: #2563eb; color: #fff; }
+        .btn-sm.primary:hover { background: #1d4ed8; }
+        .btn-sm.success { background: #10b981; color: #fff; }
+        .btn-sm.success:hover { background: #059669; }
+        .btn-sm.danger { background: #ef4444; color: #fff; }
+        .btn-sm.danger:hover { background: #dc2626; }
+        .btn-sm.outline { background: transparent; border: 1px solid #cbd5e1; color: #475569; }
+        .btn-sm.outline:hover { background: rgba(0,0,0,0.03); }
+
         .table-wrap { overflow-x: auto; }
         table {
           width: 100%;
@@ -177,127 +337,74 @@ const BrigadeUsers = () => {
         }
         table th {
           text-align: left;
+          padding: 10px 14px;
+          color: #475569;
           font-weight: 600;
-          color: #94a3b8;
-          text-transform: uppercase;
-          font-size: 0.65rem;
-          letter-spacing: 0.05em;
-          padding-bottom: 8px;
-          border-bottom: 1px solid #e2e8f0;
+          border-bottom: 1px solid rgba(226, 232, 240, 0.8);
         }
         table td {
-          padding: 10px 0;
-          border-bottom: 1px solid #f1f5f9;
-          color: #1e293b;
+          padding: 12px 14px;
+          border-bottom: 1px solid rgba(226, 232, 240, 0.5);
+          color: #0f172a;
         }
-        table tr:last-child td { border-bottom: none; }
+        table tr:hover td {
+          background: rgba(255, 255, 255, 0.4);
+        }
 
         .badge {
           display: inline-block;
-          padding: 2px 10px;
-          border-radius: 20px;
+          padding: 3px 10px;
+          border-radius: 12px;
           font-size: 0.7rem;
           font-weight: 600;
         }
+        .badge.blue { background: #dbeafe; color: #2563eb; }
         .badge.green { background: #dcfce7; color: #16a34a; }
         .badge.yellow { background: #fef9c3; color: #ca8a04; }
         .badge.red { background: #fee2e2; color: #dc2626; }
-        .badge.blue { background: #dbeafe; color: #2563eb; }
         .badge.gray { background: #f1f5f9; color: #64748b; }
-
-        .btn-sm {
-          padding: 4px 12px;
-          border: none;
-          border-radius: 6px;
-          font-size: 0.7rem;
-          font-weight: 600;
-          cursor: pointer;
-          transition: background 0.15s;
-        }
-        .btn-sm.primary { background: #2563eb; color: #fff; }
-        .btn-sm.primary:hover { background: #1d4ed8; }
-        .btn-sm.success { background: #16a34a; color: #fff; }
-        .btn-sm.success:hover { background: #15803d; }
-        .btn-sm.danger { background: #dc2626; color: #fff; }
-        .btn-sm.danger:hover { background: #b91c1c; }
-        .btn-sm.outline { background: transparent; color: #475569; border: 1px solid #e2e8f0; }
-        .btn-sm.outline:hover { background: #f1f5f9; }
-
-        .filters {
-          display: flex;
-          gap: 12px;
-          flex-wrap: wrap;
-          margin-bottom: 20px;
-        }
-        .filters select, .filters input {
-          padding: 8px 14px;
-          border-radius: 10px;
-          border: 1.5px solid #e2e8f0;
-          background: rgba(255,255,255,0.6);
-          font-family: 'Inter', sans-serif;
-          font-size: 0.85rem;
-          outline: none;
-          transition: border-color 0.2s;
-        }
-        .filters select:focus, .filters input:focus {
-          border-color: #2563eb;
-        }
 
         .actions-cell {
           display: flex;
-          gap: 6px;
-          flex-wrap: wrap;
+          align-items: center;
+          gap: 8px;
         }
 
         .status-select {
-          padding: 2px 8px;
+          padding: 4px 8px;
           border-radius: 6px;
-          border: 1px solid #e2e8f0;
-          font-size: 0.7rem;
-          font-weight: 600;
-          background: rgba(255,255,255,0.8);
+          border: 1px solid #cbd5e1;
+          font-size: 0.75rem;
+          background: #fff;
           cursor: pointer;
-        }
-
-        /* ─── Responsive ─── */
-        @media (max-width: 1024px) {
-          .main { margin-left: 200px; padding: 20px 24px; }
-        }
-        @media (max-width: 768px) {
-          .main {
-            margin-left: 0;        /* la sidebar devient relative ou on garde fixed mais on réduit le padding */
-            padding: 16px;
-          }
-          .page-header { flex-direction: column; align-items: flex-start; gap: 12px; }
         }
       `}</style>
 
       <div className="users-body">
         <div className="app">
-          {/* Sidebar fixed, importée depuis le composant séparé */}
           <BrigadeSidebar />
-
           <main className="main">
             <div className="page-header">
               <div>
-                <h1>Utilisateurs</h1>
+                <h1>Gestion des Utilisateurs de la Brigade</h1>
                 <div className="sub">
-                  Gestion des comptes — Brigade <span className="brigade-badge">BR FI</span>
+                  Brigade : <span className="brigade-badge">{brigade ? brigade.nom : 'Chargement...'}</span>
                 </div>
               </div>
               <div className="user-badge">
-                <div className="avatar">CB</div>
+                <div className="avatar">
+                  {user.prenom ? user.prenom.charAt(0) : 'U'}
+                </div>
                 <div>
-                  <div className="name">Chef Brigade</div>
+                  <div className="name">{user.prenom} {user.nom}</div>
                   <div className="role">Chef de Brigade</div>
                 </div>
               </div>
             </div>
 
-            {/* ─── Liste des agents ─── */}
             <div className="card">
               <h3>
-                👥 Agents de la brigade
+                <span>Liste des agents de la brigade ({filteredUsers.length})</span>
                 <span>
                   <button className="btn-sm success" style={{ padding: '8px 16px' }} onClick={handleAddUser}>
                     + Nouvel agent
@@ -313,7 +420,7 @@ const BrigadeUsers = () => {
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
                 <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
-                  <option value="">Rôle</option>
+                  <option value="">Rôle / Poste</option>
                   <option value="GL">GL</option>
                   <option value="CN">CN</option>
                 </select>
@@ -344,53 +451,80 @@ const BrigadeUsers = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    <tr>
-                      <td><strong>Rakoto Jean</strong></td>
-                      <td>jean.rakoto@fce.mg</td>
-                      <td><span className="badge blue">GL</span></td>
-                      <td><span className="badge green">ACTIF</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm outline" onClick={() => handleEdit('Rakoto Jean')}>✏️</button>
-                        <button className="btn-sm danger" onClick={() => handleDelete('Rakoto Jean')}>🗑️</button>
-                        <select className="status-select" defaultValue="ACTIF">
-                          <option value="ACTIF">ACTIF</option>
-                          <option value="SUSPENDU">SUSPENDU</option>
-                          <option value="ARCHIVE">ARCHIVE</option>
-                        </select>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>Ranaivo Marie</strong></td>
-                      <td>marie.ranaivo@fce.mg</td>
-                      <td><span className="badge blue">CN</span></td>
-                      <td><span className="badge green">ACTIF</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm outline" onClick={() => handleEdit('Ranaivo Marie')}>✏️</button>
-                        <button className="btn-sm danger" onClick={() => handleDelete('Ranaivo Marie')}>🗑️</button>
-                        <select className="status-select" defaultValue="ACTIF">
-                          <option value="ACTIF">ACTIF</option>
-                          <option value="SUSPENDU">SUSPENDU</option>
-                          <option value="ARCHIVE">ARCHIVE</option>
-                        </select>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>Andriatsitohaina Faly</strong></td>
-                      <td>faly.andri@fce.mg</td>
-                      <td><span className="badge blue">GL</span></td>
-                      <td><span className="badge yellow">EN_ATTENTE</span></td>
-                      <td className="actions-cell">
-                        <span className="badge gray" style={{ background: '#f1f5f9', color: '#64748b' }}>
-                          En attente de validation
-                        </span>
-                        <button className="btn-sm outline" onClick={() => handleEdit('Andriatsitohaina Faly')}>✏️</button>
-                      </td>
-                    </tr>
+                    {filteredUsers.length === 0 ? (
+                      <tr>
+                        <td colSpan="5" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
+                          Aucun utilisateur trouvé pour cette brigade
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredUsers.map((u) => {
+                        const roleClass = {
+                          'GL': 'blue',
+                          'CN': 'blue',
+                        }[u.role] || 'gray';
+
+                        const statusClass = {
+                          'ACTIF': 'green',
+                          'EN_ATTENTE': 'yellow',
+                          'SUSPENDU': 'red',
+                          'ARCHIVE': 'gray',
+                          'REJETE': 'red',
+                        }[u.statut]  || 'gray';
+
+                        return (
+                          <tr key={u.id}>
+                            <td><strong>{u.nom} {u.prenom}</strong></td>
+                            <td>{u.email}</td>
+                            <td><span className={`badge ${roleClass}`}>{u.role}</span></td>
+                            <td><span className={`badge ${statusClass}`}>{u.statut}</span></td>
+                            <td className="actions-cell">
+                              {u.statut === 'EN_ATTENTE' ? (
+                                <>
+                                  <button
+                                    className="btn-sm success"
+                                    onClick={() => handleValidate(u.id, `${u.nom} ${u.prenom}`)}
+                                  >
+                                    Valider
+                                  </button>
+                                  <button
+                                    className="btn-sm danger"
+                                    onClick={() => handleReject(u.id, `${u.nom} ${u.prenom}`)}
+                                  >
+                                    Rejeter
+                                  </button>
+                                </>
+                              ) : (
+                                <select
+                                  className="status-select"
+                                  defaultValue={u.statut}
+                                  onChange={async (e) => {
+                                    try {
+                                      await api.patch(`/accounts/users/${u.id}/`, { statut: e.target.value });
+                                      alert('✅ Statut mis à jour');
+                                      window.location.reload();
+                                    } catch (err) {
+                                      alert('❌ Erreur lors de la mise à jour');
+                                    }
+                                  }}
+                                >
+                                  <option value="ACTIF">ACTIF</option>
+                                  <option value="SUSPENDU">SUSPENDU</option>
+                                  <option value="ARCHIVE">ARCHIVE</option>
+                                </select>
+                              )}
+                              <button className="btn-sm outline" onClick={() => handleEdit(`${u.nom} ${u.prenom}`)}>✏️</button>
+                              <button className="btn-sm danger" onClick={() => handleDelete(u.id, `${u.nom} ${u.prenom}`)}>🗑️</button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
                   </tbody>
                 </table>
               </div>
-              <div style={{ marginTop: '12px', fontSize: '0.75rem', color: '#94a3b8', background: '#f1f5f9', padding: '8px 14px', borderRadius: '8px' }}>
-                ℹ️ Les comptes en attente doivent être validés par le Chef de Section.
+              <div style={{ marginTop: '12px', fontSize: '0.75rem', color: '#475569', background: '#f1f5f9', padding: '8px 14px', borderRadius: '8px' }}>
+                ℹ️ Les comptes en attente de votre brigade peuvent être validés ou rejetés directement ici par vous (Chef de Brigade).
               </div>
             </div>
           </main>

@@ -1,25 +1,162 @@
 import React, { useState } from 'react';
+import { useLoaderData, useRouteError } from 'react-router-dom';
 import SectionSidebar from '../components/SectionSidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
+// ─── Cache mémoire ───
+let sectionRapportsCache = null;
+let sectionRapportsCacheTime = 0;
+const CACHE_TTL_MS = 15000;
+
+async function fetchSectionRapportsData() {
+  const now = Date.now();
+  if (sectionRapportsCache && now - sectionRapportsCacheTime < CACHE_TTL_MS) {
+    return sectionRapportsCache;
+  }
+
+  const [
+    { data: userData },
+    { data: mouvementsData },
+    { data: stockData },
+    { data: materielsData },
+    { data: brigadesData },
+  ] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/materiaux/mouvements/'),
+    api.get('/materiaux/stock/'),
+    api.get('/materiaux/materiels/'),
+    api.get('/personnel/brigades/'),
+  ]);
+
+  // Filtrer par section du chef
+  const sectionId = userData.section;
+  const brigadesSection = brigadesData.filter(b => b.section === sectionId);
+  const brigadeIds = brigadesSection.map(b => b.id);
+
+  // Mouvements de la section
+  const mouvementsSection = mouvementsData.filter(m => brigadeIds.includes(m.brigade));
+
+  // Statistiques globales de la section
+  const totalMouvements = mouvementsSection.length;
+  const empruntsEnCours = mouvementsSection.filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS').length;
+  const retards = mouvementsSection.filter(m => m.statut === 'EN_RETARD').length;
+
+  // Matériels abîmés (état MAUVAIS ou HORS_SERVICE)
+  // On ne peut pas filtrer par section pour le stock car les matériels ne sont pas directement liés.
+  // On garde une vue globale (ou on pourrait filtrer par les matériels utilisés dans la section via les mouvements)
+  // Pour l'instant on garde tout le stock.
+  const materielsAbimes = stockData
+    .filter(s => s.etat === 'MAUVAIS' || s.etat === 'HORS_SERVICE')
+    .reduce((acc, s) => acc + s.quantite, 0);
+
+  // Stock total
+  const stockTotal = stockData.reduce((acc, s) => acc + s.quantite, 0);
+
+  // Statistiques par brigade (nombre de mouvements par brigade de la section)
+  const statsParBrigade = brigadesSection.map(b => {
+    const count = mouvementsSection.filter(m => m.brigade === b.id).length;
+    return { ...b, count };
+  }).sort((a, b) => b.count - a.count);
+
+  // Top 5 des matériels les plus empruntés (via les mouvements EMPRUNT de la section)
+  const empruntsParMateriel = {};
+  mouvementsSection
+    .filter(m => m.type === 'EMPRUNT')
+    .forEach(m => {
+      const id = m.materiel;
+      if (!empruntsParMateriel[id]) empruntsParMateriel[id] = 0;
+      empruntsParMateriel[id] += m.quantite;
+    });
+  const topMateriels = Object.entries(empruntsParMateriel)
+    .map(([id, qte]) => ({ id: parseInt(id), qte }))
+    .sort((a, b) => b.qte - a.qte)
+    .slice(0, 5)
+    .map(item => {
+      const m = materielsData.find(mat => mat.id === item.id);
+      return m ? { nom: m.nom, qte: item.qte } : null;
+    })
+    .filter(Boolean);
+
+  const result = {
+    user: userData,
+    mouvements: mouvementsSection,
+    stock: stockData,
+    materiels: materielsData,
+    brigades: brigadesSection,
+    totalMouvements,
+    empruntsEnCours,
+    retards,
+    materielsAbimes,
+    stockTotal,
+    statsParBrigade,
+    topMateriels,
+  };
+
+  sectionRapportsCache = result;
+  sectionRapportsCacheTime = now;
+  return result;
+}
+
+// ─── Loader ───
+export async function sectionRapportsLoader() {
+  return fetchSectionRapportsData();
+}
+
+// ─── ErrorElement ───
+export function SectionRapportsError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement des rapports:', error);
+  return (
+    <div className="rapports-body">
+      <div className="app">
+        <SectionSidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh', flexDirection: 'column' }}>
+          <h2 style={{ color: 'red' }}>Erreur</h2>
+          <p>Impossible de charger les données. Veuillez réessayer.</p>
+          <button className="btn-sm primary" onClick={() => window.location.reload()}>Réessayer</button>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── Composant principal ───
 const SectionRapports = () => {
-  // ─── States pour les filtres ───
+  const {
+    user,
+    mouvements,
+    stock,
+    materiels,
+    brigades,
+    totalMouvements,
+    empruntsEnCours,
+    retards,
+    materielsAbimes,
+    stockTotal,
+    statsParBrigade,
+    topMateriels,
+  } = useLoaderData();
+
+  // États pour les filtres
   const [periode, setPeriode] = useState('');
   const [brigade, setBrigade] = useState('');
 
   // ─── Handlers ───
   const handleGenerer = () => {
     alert(`📊 Rapport généré !\nPériode: ${periode || 'Toutes'}\nBrigade: ${brigade || 'Toutes'}`);
+    // Ici on pourrait recharger les données avec les filtres
   };
 
   const handleExportPDF = () => {
     alert('📥 Export PDF en cours...');
   };
 
-  const handleCardClick = (titre) => {
-    alert(`📄 Voir les détails : ${titre}`);
+  const handleCardClick = (titre, detail) => {
+    alert(`📄 ${titre}\n${detail || ''}`);
   };
 
+  // ─── Rendu ───
   return (
     <>
       <style>{`
@@ -247,13 +384,13 @@ const SectionRapports = () => {
               <div>
                 <h1>Rapports</h1>
                 <div className="sub">
-                  Analyses et statistiques — Section <span className="section-badge">Fianarantsoa</span>
+                  Analyses et statistiques — Section <span className="section-badge">{user?.section?.nom || 'N/A'}</span>
                 </div>
               </div>
               <div className="user-badge">
-                <div className="avatar">CS</div>
+                <div className="avatar">{user?.nom ? user.nom[0] : 'CS'}</div>
                 <div>
-                  <div className="name">Chef Section</div>
+                  <div className="name">{user?.nom || 'Chef'}</div>
                   <div className="role">Chef de Section</div>
                 </div>
               </div>
@@ -268,12 +405,10 @@ const SectionRapports = () => {
                 <option value="annee">Cette année</option>
               </select>
               <select value={brigade} onChange={(e) => setBrigade(e.target.value)}>
-                <option value="">Brigade</option>
-                <option value="Toutes">Toutes</option>
-                <option value="BOA">BOA</option>
-                <option value="BR FI">BR FI</option>
-                <option value="BR ADV">BR ADV</option>
-                <option value="BR TLG">BR TLG</option>
+                <option value="">Toutes les brigades</option>
+                {brigades.map(b => (
+                  <option key={b.id} value={b.id}>{b.nom}</option>
+                ))}
               </select>
               <button className="btn-sm primary" style={{ padding: '8px 20px' }} onClick={handleGenerer}>
                 Générer
@@ -289,42 +424,59 @@ const SectionRapports = () => {
 
             {/* ─── Cartes de rapports ─── */}
             <div className="report-grid">
-              <div className="report-card" onClick={() => handleCardClick('Emprunts en cours')}>
+              <div className="report-card" onClick={() => handleCardClick('Emprunts en cours', `${empruntsEnCours} matériels actuellement empruntés`)}>
                 <div className="icon">📊</div>
                 <div className="title">Emprunts en cours</div>
-                <div className="desc">15 matériels actuellement empruntés</div>
-                <span className="badge yellow">+5 ce mois</span>
+                <div className="desc">{empruntsEnCours} matériels actuellement empruntés</div>
+                <span className="badge yellow">{empruntsEnCours > 0 ? `+${empruntsEnCours} en cours` : 'Aucun'}</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Retards')}>
+              <div className="report-card" onClick={() => handleCardClick('Retards', `${retards} retards signalés`)}>
                 <div className="icon">⏰</div>
                 <div className="title">Retards</div>
-                <div className="desc">3 retards signalés</div>
-                <span className="badge red">+1 aujourd'hui</span>
+                <div className="desc">{retards} retards signalés</div>
+                <span className="badge red">{retards > 0 ? `${retards} à traiter` : '✅ Aucun'}</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Par Brigade')}>
+              <div className="report-card" onClick={() => handleCardClick('Par Brigade', statsParBrigade.map(b => `${b.nom} : ${b.count}`).join(' | '))}>
                 <div className="icon">🏢</div>
                 <div className="title">Par Brigade</div>
-                <div className="desc">BR FI : 12 | BOA : 8 | BR ADV : 7</div>
+                <div className="desc">{statsParBrigade.slice(0, 3).map(b => `${b.nom} : ${b.count}`).join(' | ')}</div>
                 <span className="badge blue">Voir détails</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Matériels abîmés')}>
+              <div className="report-card" onClick={() => handleCardClick('Matériels abîmés', `${materielsAbimes} en mauvais état`)}>
                 <div className="icon">🔧</div>
                 <div className="title">Matériels abîmés</div>
-                <div className="desc">38 en mauvais état</div>
-                <span className="badge orange">+5 ce trim.</span>
+                <div className="desc">{materielsAbimes} en mauvais état</div>
+                <span className="badge orange">{materielsAbimes > 0 ? `+${materielsAbimes} à réparer` : '✅ Bon état'}</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Stock total')}>
+              <div className="report-card" onClick={() => handleCardClick('Stock total', `${stockTotal} unités en stock`)}>
                 <div className="icon">📦</div>
                 <div className="title">Stock total</div>
-                <div className="desc">587 unités en stock</div>
-                <span className="badge green">+12 ce mois</span>
+                <div className="desc">{stockTotal} unités en stock</div>
+                <span className="badge green">{stockTotal > 0 ? `${stockTotal} disponibles` : 'Stock vide'}</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Mouvements')}>
+              <div className="report-card" onClick={() => handleCardClick('Mouvements', `${totalMouvements} opérations`)}>
                 <div className="icon">🔄</div>
                 <div className="title">Mouvements</div>
-                <div className="desc">98 opérations ce mois</div>
-                <span className="badge blue">Voir détails</span>
+                <div className="desc">{totalMouvements} opérations au total</div>
+                <span className="badge blue">{totalMouvements > 0 ? `+${totalMouvements} enregistrés` : 'Aucun'}</span>
               </div>
+            </div>
+
+            {/* ─── Détails supplémentaires ─── */}
+            <div className="card">
+              <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '14px' }}>📋 Top 5 des matériels les plus empruntés</h3>
+              {topMateriels.length > 0 ? (
+                <ul style={{ listStyle: 'none', padding: 0 }}>
+                  {topMateriels.map((m, i) => (
+                    <li key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f1f5f9' }}>
+                      <span><strong>{i+1}.</strong> {m.nom}</span>
+                      <span className="badge blue">{m.qte} emprunts</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p style={{ color: '#94a3b8' }}>Aucun emprunt enregistré</p>
+              )}
             </div>
 
           </main>

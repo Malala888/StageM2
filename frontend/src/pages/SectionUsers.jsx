@@ -1,17 +1,125 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useLoaderData, useRouteError, useNavigate } from 'react-router-dom';
 import SectionSidebar from '../components/SectionSidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
+// ─── Cache mémoire ───
+let sectionUsersCache = null;
+let sectionUsersCacheTime = 0;
+const CACHE_TTL_MS = 15000;
+
+export async function clearSectionUsersCache() {
+  sectionUsersCache = null;
+  sectionUsersCacheTime = 0;
+}
+
+async function fetchSectionUsersData() {
+  const now = Date.now();
+  if (sectionUsersCache && now - sectionUsersCacheTime < CACHE_TTL_MS) {
+    return sectionUsersCache;
+  }
+
+  const [
+    { data: userData },
+    { data: usersData },
+    { data: sectionsData },
+    { data: brigadesData },
+  ] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/accounts/users/'),
+    api.get('/personnel/sections/'),
+    api.get('/personnel/brigades/'),
+  ]);
+
+  // Filtrer par section du chef
+  const sectionId = userData.section;
+  const usersSection = usersData.filter(u => u.section === sectionId);
+  const brigadesSection = brigadesData.filter(b => b.section === sectionId);
+
+  const result = {
+    user: userData,
+    users: usersSection,
+    sections: sectionsData,
+    brigades: brigadesSection,
+  };
+
+  sectionUsersCache = result;
+  sectionUsersCacheTime = now;
+  return result;
+}
+
+// ─── Loader ───
+export async function sectionUsersLoader() {
+  return fetchSectionUsersData();
+}
+
+// ─── ErrorElement ───
+export function SectionUsersError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement des utilisateurs:', error);
+  return (
+    <div className="users-body">
+      <div className="app">
+        <SectionSidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh', flexDirection: 'column' }}>
+          <h2 style={{ color: 'red' }}>Erreur</h2>
+          <p>Impossible de charger les données. Veuillez réessayer.</p>
+          <button className="btn-sm primary" onClick={() => window.location.reload()}>Réessayer</button>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── Composant principal ───
 const SectionUsers = () => {
-  // ─── States pour les filtres ───
+  const initialData = useLoaderData();
+  const [usersList, setUsersList] = useState(initialData.users);
+  const user = initialData.user;
+  const sections = initialData.sections;
+  const brigades = initialData.brigades;
+
+  const navigate = useNavigate();
+
+  // ─── États pour les filtres ───
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
   const [brigadeFilter, setBrigadeFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [filteredUsers, setFilteredUsers] = useState(usersList);
+
+  // ─── Appliquer les filtres ───
+  useEffect(() => {
+    let result = usersList;
+
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      result = result.filter(u =>
+        u.nom.toLowerCase().includes(term) ||
+        u.prenom.toLowerCase().includes(term) ||
+        u.email.toLowerCase().includes(term)
+      );
+    }
+
+    if (roleFilter) {
+      result = result.filter(u => u.role === roleFilter);
+    }
+
+    if (brigadeFilter) {
+      result = result.filter(u => u.brigade === parseInt(brigadeFilter));
+    }
+
+    if (statusFilter) {
+      result = result.filter(u => u.statut === statusFilter);
+    }
+
+    setFilteredUsers(result);
+  }, [searchTerm, roleFilter, brigadeFilter, statusFilter, usersList]);
 
   // ─── Handlers ───
-  const handleFilter = () => {
-    alert('Filtres appliqués !');
+  const handleFilter = (e) => {
+    e.preventDefault();
   };
 
   const handleReset = () => {
@@ -29,18 +137,43 @@ const SectionUsers = () => {
     alert(`✏️ Modifier : ${nom}`);
   };
 
-  const handleDelete = (nom) => {
-    alert(`🗑️ Supprimer : ${nom}`);
+  const handleDelete = async (id, nom) => {
+    if (!confirm(`Supprimer "${nom}" ?`)) return;
+    try {
+      await api.delete(`/accounts/users/${id}/`);
+      setUsersList(prev => prev.filter(u => u.id !== id));
+      clearSectionUsersCache();
+    } catch (err) {
+      alert('❌ Erreur lors de la suppression');
+      console.error(err);
+    }
   };
 
-  const handleValidate = (nom) => {
-    alert(`✅ Valider : ${nom}`);
+  const handleValidate = async (id, nom) => {
+    try {
+      await api.patch(`/accounts/users/${id}/valider/`);
+      // Mise à jour instantanée de l'état local sans rechargement de page complet
+      setUsersList(prev => prev.map(u => u.id === id ? { ...u, statut: 'ACTIF' } : u));
+      clearSectionUsersCache();
+    } catch (err) {
+      alert('❌ Erreur lors de la validation');
+      console.error(err);
+    }
   };
 
-  const handleReject = (nom) => {
-    alert(`❌ Rejeter : ${nom}`);
+  const handleReject = async (id, nom) => {
+    if (!confirm(`Rejeter ${nom} ?`)) return;
+    try {
+      await api.patch(`/accounts/users/${id}/rejeter/`);
+      setUsersList(prev => prev.map(u => u.id === id ? { ...u, statut: 'REJETE' } : u));
+      clearSectionUsersCache();
+    } catch (err) {
+      alert('❌ Erreur lors du rejet');
+      console.error(err);
+    }
   };
 
+  // ─── Rendu ───
   return (
     <>
       <style>{`
@@ -89,16 +222,14 @@ const SectionUsers = () => {
         .app {
           position: relative;
           z-index: 1;
-          display: flex;
+          display: block;
           min-height: 100vh;
         }
 
-        /* ─── Contenu principal avec marge ─── */
         .main {
-          flex: 1;
-          padding: 28px 36px;
           margin-left: 240px;
-          max-width: calc(100% - 240px);
+          padding: 28px 36px;
+          min-height: 100vh;
         }
 
         .page-header {
@@ -180,6 +311,46 @@ const SectionUsers = () => {
           justify-content: space-between;
         }
 
+        .filters {
+          display: flex;
+          gap: 12px;
+          margin-bottom: 20px;
+          flex-wrap: wrap;
+        }
+        .filters input, .filters select {
+          padding: 8px 14px;
+          border-radius: 8px;
+          border: 1px solid rgba(203, 213, 225, 0.8);
+          background: rgba(255, 255, 255, 0.8);
+          font-size: 0.85rem;
+          outline: none;
+        }
+        .filters input:focus, .filters select:focus {
+          border-color: #2563eb;
+          background: #fff;
+        }
+
+        .btn-sm {
+          padding: 6px 12px;
+          border-radius: 6px;
+          font-size: 0.75rem;
+          font-weight: 600;
+          cursor: pointer;
+          border: none;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          transition: all 0.2s;
+        }
+        .btn-sm.primary { background: #2563eb; color: #fff; }
+        .btn-sm.primary:hover { background: #1d4ed8; }
+        .btn-sm.success { background: #10b981; color: #fff; }
+        .btn-sm.success:hover { background: #059669; }
+        .btn-sm.danger { background: #ef4444; color: #fff; }
+        .btn-sm.danger:hover { background: #dc2626; }
+        .btn-sm.outline { background: transparent; border: 1px solid #cbd5e1; color: #475569; }
+        .btn-sm.outline:hover { background: rgba(0,0,0,0.03); }
+
         .table-wrap { overflow-x: auto; }
         table {
           width: 100%;
@@ -188,125 +359,76 @@ const SectionUsers = () => {
         }
         table th {
           text-align: left;
+          padding: 10px 14px;
+          color: #475569;
           font-weight: 600;
-          color: #94a3b8;
-          text-transform: uppercase;
-          font-size: 0.65rem;
-          letter-spacing: 0.05em;
-          padding-bottom: 8px;
-          border-bottom: 1px solid #e2e8f0;
+          border-bottom: 1px solid rgba(226, 232, 240, 0.8);
         }
         table td {
-          padding: 10px 0;
-          border-bottom: 1px solid #f1f5f9;
-          color: #1e293b;
+          padding: 12px 14px;
+          border-bottom: 1px solid rgba(226, 232, 240, 0.5);
+          color: #0f172a;
         }
-        table tr:last-child td { border-bottom: none; }
+        table tr:hover td {
+          background: rgba(255, 255, 255, 0.4);
+        }
 
         .badge {
           display: inline-block;
-          padding: 2px 10px;
-          border-radius: 20px;
+          padding: 3px 10px;
+          border-radius: 12px;
           font-size: 0.7rem;
           font-weight: 600;
         }
+        .badge.blue { background: #dbeafe; color: #2563eb; }
         .badge.green { background: #dcfce7; color: #16a34a; }
         .badge.yellow { background: #fef9c3; color: #ca8a04; }
         .badge.red { background: #fee2e2; color: #dc2626; }
-        .badge.blue { background: #dbeafe; color: #2563eb; }
         .badge.gray { background: #f1f5f9; color: #64748b; }
-
-        .btn-sm {
-          padding: 4px 12px;
-          border: none;
-          border-radius: 6px;
-          font-size: 0.7rem;
-          font-weight: 600;
-          cursor: pointer;
-          transition: background 0.15s;
-        }
-        .btn-sm.primary { background: #2563eb; color: #fff; }
-        .btn-sm.primary:hover { background: #1d4ed8; }
-        .btn-sm.success { background: #16a34a; color: #fff; }
-        .btn-sm.success:hover { background: #15803d; }
-        .btn-sm.danger { background: #dc2626; color: #fff; }
-        .btn-sm.danger:hover { background: #b91c1c; }
-        .btn-sm.outline { background: transparent; color: #475569; border: 1px solid #e2e8f0; }
-        .btn-sm.outline:hover { background: #f1f5f9; }
-
-        .filters {
-          display: flex;
-          gap: 12px;
-          flex-wrap: wrap;
-          margin-bottom: 20px;
-        }
-        .filters select, .filters input {
-          padding: 8px 14px;
-          border-radius: 10px;
-          border: 1.5px solid #e2e8f0;
-          background: rgba(255,255,255,0.6);
-          font-family: 'Inter', sans-serif;
-          font-size: 0.85rem;
-          outline: none;
-          transition: border-color 0.2s;
-        }
-        .filters select:focus, .filters input:focus {
-          border-color: #2563eb;
-        }
 
         .actions-cell {
           display: flex;
-          gap: 6px;
-          flex-wrap: wrap;
+          align-items: center;
+          gap: 8px;
         }
 
         .status-select {
-          padding: 2px 8px;
+          padding: 4px 8px;
           border-radius: 6px;
-          border: 1px solid #e2e8f0;
-          font-size: 0.7rem;
-          font-weight: 600;
-          background: rgba(255,255,255,0.8);
+          border: 1px solid #cbd5e1;
+          font-size: 0.75rem;
+          background: #fff;
           cursor: pointer;
-        }
-
-        @media (max-width: 1024px) {
-          .main { padding: 20px 24px; max-width: calc(100% - 200px); margin-left: 200px; }
-        }
-        @media (max-width: 768px) {
-          .app { flex-direction: column; }
-          .main { max-width: 100%; padding: 16px; margin-left: 0; }
-          .page-header { flex-direction: column; align-items: flex-start; gap: 12px; }
         }
       `}</style>
 
       <div className="users-body">
         <div className="app">
-
           <SectionSidebar />
-
           <main className="main">
-
             <div className="page-header">
               <div>
-                <h1>Utilisateurs</h1>
+                <h1>Gestion des Utilisateurs de la Section</h1>
                 <div className="sub">
-                  Gestion des comptes — Section <span className="section-badge">Fianarantsoa</span>
+                  Section : <span className="section-badge">
+                    {sections.find(s => s.id === user.section)?.nom || 'Section FCE'}
+                  </span>
                 </div>
               </div>
               <div className="user-badge">
-                <div className="avatar">CS</div>
+                <div className="avatar">
+                  {user.prenom ? user.prenom.charAt(0) : 'U'}
+                </div>
                 <div>
-                  <div className="name">Chef Section</div>
+                  <div className="name">{user.prenom} {user.nom}</div>
                   <div className="role">Chef de Section</div>
                 </div>
               </div>
             </div>
 
-            {/* ─── Liste des utilisateurs ─── */}
             <div className="card">
               <h3>
-                👥 Agents de la section
+                <span>Liste des agents ({filteredUsers.length})</span>
                 <span>
                   <button className="btn-sm success" style={{ padding: '8px 16px' }} onClick={handleAddUser}>
                     + Nouvel agent
@@ -323,15 +445,15 @@ const SectionUsers = () => {
                 />
                 <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
                   <option value="">Rôle</option>
+                  <option value="CHEF_BRIGADE">CHEF_BRIGADE</option>
                   <option value="GL">GL</option>
                   <option value="CN">CN</option>
                 </select>
                 <select value={brigadeFilter} onChange={(e) => setBrigadeFilter(e.target.value)}>
                   <option value="">Brigade</option>
-                  <option value="BOA">BOA</option>
-                  <option value="BR FI">BR FI</option>
-                  <option value="BR ADV">BR ADV</option>
-                  <option value="BR TLG">BR TLG</option>
+                  {brigades.map(b => (
+                    <option key={b.id} value={b.id}>{b.nom}</option>
+                  ))}
                 </select>
                 <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                   <option value="">Statut</option>
@@ -361,50 +483,82 @@ const SectionUsers = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    <tr>
-                      <td><strong>Rakoto Jean</strong></td>
-                      <td>jean.rakoto@fce.mg</td>
-                      <td><span className="badge blue">GL</span></td>
-                      <td>BR FI</td>
-                      <td><span className="badge green">ACTIF</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm outline" onClick={() => handleEdit('Rakoto Jean')}>✏️</button>
-                        <button className="btn-sm danger" onClick={() => handleDelete('Rakoto Jean')}>🗑️</button>
-                        <select className="status-select" defaultValue="ACTIF">
-                          <option value="ACTIF">ACTIF</option>
-                          <option value="SUSPENDU">SUSPENDU</option>
-                          <option value="ARCHIVE">ARCHIVE</option>
-                        </select>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>Ranaivo Marie</strong></td>
-                      <td>marie.ranaivo@fce.mg</td>
-                      <td><span className="badge blue">CN</span></td>
-                      <td>BOA</td>
-                      <td><span className="badge yellow">EN_ATTENTE</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm success" onClick={() => handleValidate('Ranaivo Marie')}>Valider</button>
-                        <button className="btn-sm danger" onClick={() => handleReject('Ranaivo Marie')}>Rejeter</button>
-                        <button className="btn-sm outline" onClick={() => handleEdit('Ranaivo Marie')}>✏️</button>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>Andriatsitohaina Faly</strong></td>
-                      <td>faly.andri@fce.mg</td>
-                      <td><span className="badge blue">CHEF_BRIGADE</span></td>
-                      <td>BR ADV</td>
-                      <td><span className="badge green">ACTIF</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm outline" onClick={() => handleEdit('Andriatsitohaina Faly')}>✏️</button>
-                        <button className="btn-sm danger" onClick={() => handleDelete('Andriatsitohaina Faly')}>🗑️</button>
-                        <select className="status-select" defaultValue="ACTIF">
-                          <option value="ACTIF">ACTIF</option>
-                          <option value="SUSPENDU">SUSPENDU</option>
-                          <option value="ARCHIVE">ARCHIVE</option>
-                        </select>
-                      </td>
-                    </tr>
+                    {filteredUsers.length === 0 ? (
+                      <tr>
+                        <td colSpan="6" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
+                          Aucun utilisateur trouvé
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredUsers.map((u) => {
+                        const roleClass = {
+                          'ADMIN': 'red',
+                          'CHEF_SECTION': 'blue',
+                          'CHEF_BRIGADE': 'blue',
+                          'GL': 'blue',
+                          'CN': 'blue',
+                        }[u.role] || 'gray';
+
+                        const statusClass = {
+                          'ACTIF': 'green',
+                          'EN_ATTENTE': 'yellow',
+                          'SUSPENDU': 'red',
+                          'ARCHIVE': 'gray',
+                          'REJETE': 'red',
+                        }[u.statut] || 'gray';
+
+                        const brigadeName = brigades.find(b => b.id === u.brigade)?.nom || 'N/A';
+
+                        return (
+                          <tr key={u.id}>
+                            <td><strong>{u.nom} {u.prenom}</strong></td>
+                            <td>{u.email}</td>
+                            <td><span className={`badge ${roleClass}`}>{u.role}</span></td>
+                            <td>{brigadeName}</td>
+                            <td><span className={`badge ${statusClass}`}>{u.statut}</span></td>
+                            <td className="actions-cell">
+                              {u.statut === 'EN_ATTENTE' ? (
+                                <>
+                                  <button
+                                    className="btn-sm success"
+                                    onClick={() => handleValidate(u.id, `${u.nom} ${u.prenom}`)}
+                                  >
+                                    Valider
+                                  </button>
+                                  <button
+                                    className="btn-sm danger"
+                                    onClick={() => handleReject(u.id, `${u.nom} ${u.prenom}`)}
+                                  >
+                                    Rejeter
+                                  </button>
+                                </>
+                              ) : (
+                                <select
+                                  className="status-select"
+                                  defaultValue={u.statut}
+                                  onChange={async (e) => {
+                                    const newStatut = e.target.value;
+                                    try {
+                                      await api.patch(`/accounts/users/${u.id}/`, { statut: newStatut });
+                                      setUsersList(prev => prev.map(item => item.id === u.id ? { ...item, statut: newStatut } : item));
+                                      clearSectionUsersCache();
+                                    } catch (err) {
+                                      alert('❌ Erreur lors de la mise à jour');
+                                    }
+                                  }}
+                                >
+                                  <option value="ACTIF">ACTIF</option>
+                                  <option value="SUSPENDU">SUSPENDU</option>
+                                  <option value="ARCHIVE">ARCHIVE</option>
+                                </select>
+                              )}
+                              <button className="btn-sm outline" onClick={() => handleEdit(`${u.nom} ${u.prenom}`)}>✏️</button>
+                              <button className="btn-sm danger" onClick={() => handleDelete(u.id, `${u.nom} ${u.prenom}`)}>🗑️</button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
                   </tbody>
                 </table>
               </div>

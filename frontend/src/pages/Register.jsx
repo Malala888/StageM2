@@ -46,7 +46,6 @@ const Register = () => {
         setBrigades(brigadesRes.data);
       } catch (err) {
         console.error('Erreur de chargement des données:', err);
-        // On peut utiliser des données par défaut si nécessaire
       } finally {
         setLoading(false);
       }
@@ -119,12 +118,22 @@ const Register = () => {
       return;
     }
 
+    let sectionId = null;
+    if (role === 'CHEF_SECTION' && section) {
+      sectionId = parseInt(section);
+    } else if (brigade) {
+      const selectedBrigadeObj = brigades.find(b => b.id === parseInt(brigade));
+      if (selectedBrigadeObj) {
+        sectionId = selectedBrigadeObj.section;
+      }
+    }
+
     const payload = {
       nom,
       prenom,
       email,
       role,
-      section: (role === 'CHEF_SECTION' && section) ? parseInt(section) : null,
+      section: sectionId,
       brigade: (role !== 'CHEF_SECTION' && brigade) ? parseInt(brigade) : null,
       password,
     };
@@ -187,7 +196,7 @@ const Register = () => {
 
         html, body {
           min-height: 100%;
-          overflow-y: auto;
+          font-family: 'Inter', sans-serif;
         }
 
         #root {
@@ -206,79 +215,92 @@ const Register = () => {
 
         .register-body {
           font-family: 'Inter', sans-serif;
+          background: url(${backgroundImage}) center / cover no-repeat fixed;
+          position: fixed;
+          inset: 0;
           display: flex;
           align-items: center;
           justify-content: center;
+          overflow-y: auto;
           padding: 24px;
-          min-height: 100vh;
-          width: 100%;
-          background: url(${backgroundImage}) center / cover no-repeat fixed;
-          position: relative;
         }
 
         .register-body::before {
           content: '';
           position: fixed;
           inset: 0;
-          background: rgba(255, 255, 255, 0.30);
-          backdrop-filter: blur(2px);
-          -webkit-backdrop-filter: blur(2px);
+          background: rgba(255, 255, 255, 0.25);
+          backdrop-filter: blur(3px);
+          -webkit-backdrop-filter: blur(3px);
           z-index: 0;
         }
 
         .card {
           position: relative;
           z-index: 1;
-          width: 100%;
-          max-width: 460px;
           background: rgba(255, 255, 255, 0.85);
           backdrop-filter: blur(12px);
-          -webkit-backdrop-filter: blur(12px);
+          border-radius: 20px;
+          padding: 36px 40px;
+          width: 100%;
+          max-width: 460px;
           border: 1px solid rgba(255, 255, 255, 0.6);
-          border-radius: 24px;
-          padding: 28px 36px 32px;
-          box-shadow: 0 20px 50px -12px rgba(0, 20, 40, 0.15);
-          margin: 16px 0;
+          box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+          margin: auto;
         }
 
-        .card-title {
-          font-size: 2rem;
+        .logo-area {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-bottom: 24px;
+        }
+
+        .logo-icon {
+          width: 44px;
+          height: 44px;
+          background: #2563eb;
+          border-radius: 12px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-weight: 700;
+          font-size: 1.2rem;
+        }
+
+        .logo-text h2 {
+          font-size: 1.25rem;
           font-weight: 700;
           color: #0f172a;
-          letter-spacing: -0.02em;
-          margin-bottom: 6px;
         }
-        .card-sub {
-          font-size: 0.9rem;
+
+        .logo-text p {
+          font-size: 0.8rem;
           color: #475569;
-          font-weight: 400;
-          margin-bottom: 28px;
+          font-weight: 500;
         }
 
-        form {
-          display: flex;
-          flex-direction: column;
-          gap: 14px;
+        .alert {
+          padding: 10px 14px;
+          border-radius: 8px;
+          font-size: 0.8rem;
+          margin-bottom: 16px;
+          font-weight: 500;
         }
-
-        .field-group {
-          display: flex;
-          gap: 12px;
-        }
-        .field-group .field { flex: 1; }
+        .alert.error { background: #fee2e2; color: #dc2626; border: 1px solid #fecaca; }
+        .alert.success { background: #dcfce7; color: #16a34a; border: 1px solid #bbf7d0; }
 
         .field {
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
+          margin-bottom: 16px;
         }
 
         .field-label {
-          font-size: 0.75rem;
+          display: block;
+          font-size: 0.8rem;
           font-weight: 600;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-          color: #475569;
+          color: #334155;
+          margin-bottom: 6px;
         }
 
         .input-wrap {
@@ -286,213 +308,147 @@ const Register = () => {
           display: flex;
           align-items: center;
         }
+
+        .input-wrap input,
+        .input-wrap select {
+          width: 100%;
+          padding: 10px 14px 10px 40px;
+          border-radius: 10px;
+          border: 1px solid rgba(203, 213, 225, 0.8);
+          background: rgba(255, 255, 255, 0.9);
+          font-size: 0.85rem;
+          color: #0f172a;
+          outline: none;
+          transition: all 0.2s;
+        }
+
+        .input-wrap input:focus,
+        .input-wrap select:focus {
+          border-color: #2563eb;
+          background: #fff;
+          box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+        }
+
         .input-wrap .ico {
           position: absolute;
-          left: 16px;
-          width: 20px;
-          height: 20px;
-          stroke: #94a3b8;
+          left: 12px;
+          width: 18px;
+          height: 18px;
+          stroke: #64748b;
           fill: none;
           stroke-width: 2;
           stroke-linecap: round;
           stroke-linejoin: round;
           pointer-events: none;
-          transition: stroke 0.2s;
-        }
-        .input-wrap:focus-within .ico { stroke: #2563eb; }
-
-        input[type="text"],
-        input[type="email"],
-        input[type="password"],
-        select {
-          width: 100%;
-          font-family: 'Inter', sans-serif;
-          font-size: 0.95rem;
-          padding: 12px 16px 12px 48px;
-          border-radius: 12px;
-          border: 1.5px solid #e2e8f0;
-          background: rgba(255, 255, 255, 0.7);
-          color: #0f172a;
-          outline: none;
-          transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
-          appearance: none;
-          -webkit-appearance: none;
-        }
-        select {
-          padding-right: 40px;
-          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23475569' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-          background-repeat: no-repeat;
-          background-position: right 16px center;
-          cursor: pointer;
-        }
-        input::placeholder { color: #94a3b8; }
-        input:hover, select:hover {
-          border-color: #94a3b8;
-          background: #ffffff;
-        }
-        input:focus, select:focus {
-          border-color: #2563eb;
-          background: #ffffff;
-          box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
         }
 
         .toggle-pwd {
           position: absolute;
-          right: 14px;
+          right: 12px;
           background: none;
           border: none;
           cursor: pointer;
-          padding: 4px;
           display: flex;
           align-items: center;
-          justify-content: center;
-          color: #94a3b8;
-          transition: color 0.2s;
         }
-        .toggle-pwd:hover { color: #0f172a; }
+
         .toggle-pwd svg {
-          width: 20px;
-          height: 20px;
-          stroke: currentColor;
+          width: 18px;
+          height: 18px;
+          stroke: #64748b;
           fill: none;
           stroke-width: 2;
           stroke-linecap: round;
           stroke-linejoin: round;
-          display: block;
         }
 
         .strength-bar {
           display: flex;
           gap: 4px;
-          margin-top: 5px;
+          margin-top: 6px;
         }
         .strength-bar span {
           flex: 1;
-          height: 3px;
-          border-radius: 10px;
+          height: 4px;
           background: #e2e8f0;
-          transition: background 0.25s;
+          border-radius: 2px;
+          transition: background 0.3s;
         }
         .strength-label {
           font-size: 0.7rem;
-          font-weight: 600;
-          color: #94a3b8;
-          min-height: 16px;
-          margin-top: 3px;
-          transition: color 0.25s;
+          color: #64748b;
+          margin-top: 4px;
+          text-align: right;
         }
 
         .match-message {
-          font-size: 0.7rem;
-          font-weight: 600;
-          min-height: 16px;
-          margin-top: 3px;
-          transition: color 0.25s;
-        }
-        .match-message.valid { color: #22c55e; }
-        .match-message.invalid { color: #ef4444; }
-
-        .submit-message {
-          padding: 10px 14px;
-          border-radius: 8px;
-          font-size: 0.9rem;
+          font-size: 0.75rem;
+          margin-top: 4px;
           font-weight: 500;
         }
-        .submit-message.success {
-          background: #dcfce7;
-          color: #16a34a;
-        }
-        .submit-message.error {
-          background: #fee2e2;
-          color: #dc2626;
-        }
+        .match-message.valid { color: #16a34a; }
+        .match-message.invalid { color: #dc2626; }
 
         .btn-primary {
-          margin-top: 4px;
-          padding: 14px 20px;
-          border: none;
-          border-radius: 12px;
+          width: 100%;
+          padding: 12px;
           background: #2563eb;
-          color: #ffffff;
-          font-family: 'Inter', sans-serif;
+          color: #fff;
+          border: none;
+          border-radius: 10px;
           font-weight: 600;
-          font-size: 0.95rem;
+          font-size: 0.9rem;
           cursor: pointer;
-          box-shadow: 0 8px 20px -8px rgba(37, 99, 235, 0.3);
-          transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
-          position: relative;
-          overflow: hidden;
+          transition: background 0.2s, transform 0.1s;
+          margin-top: 8px;
         }
-        .btn-primary::after {
-          content: "";
-          position: absolute;
-          inset: 0;
-          background: linear-gradient(180deg, rgba(255, 255, 255, 0.15) 0%, transparent 60%);
-          pointer-events: none;
-        }
-        .btn-primary:hover {
-          background: #1d4ed8;
-          transform: translateY(-1px);
-          box-shadow: 0 12px 28px -8px rgba(37, 99, 235, 0.4);
-        }
-        .btn-primary:active { transform: translateY(0); }
-        .btn-primary:disabled {
-          opacity: 0.6;
-          cursor: not-allowed;
-        }
+        .btn-primary:hover { background: #1d4ed8; }
+        .btn-primary:active { transform: scale(0.99); }
+        .btn-primary:disabled { background: #94a3b8; cursor: not-allowed; }
 
         .divider {
-          display: flex;
-          align-items: center;
-          gap: 14px;
-          color: #94a3b8;
+          text-align: center;
+          margin: 18px 0;
+          position: relative;
           font-size: 0.75rem;
-          font-weight: 600;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-          margin: 8px 0 4px;
+          color: #64748b;
+          font-weight: 500;
         }
-        .divider::before,
-        .divider::after {
-          content: "";
-          flex: 1;
+        .divider::before, .divider::after {
+          content: '';
+          position: absolute;
+          top: 50%;
+          width: 42%;
           height: 1px;
           background: #e2e8f0;
         }
+        .divider::before { left: 0; }
+        .divider::after { right: 0; }
 
         .btn-google {
+          width: 100%;
+          padding: 10px;
+          background: #fff;
+          color: #334155;
+          border: 1px solid #cbd5e1;
+          border-radius: 10px;
+          font-weight: 600;
+          font-size: 0.85rem;
+          cursor: pointer;
           display: flex;
           align-items: center;
           justify-content: center;
           gap: 10px;
-          padding: 12px 14px;
-          border-radius: 12px;
-          border: 1.5px solid #e2e8f0;
-          background: rgba(255, 255, 255, 0.5);
-          color: #1e293b;
-          font-family: 'Inter', sans-serif;
-          font-weight: 600;
-          font-size: 0.88rem;
-          cursor: pointer;
-          transition: border-color 0.2s, background 0.2s, transform 0.15s;
+          transition: background 0.2s;
         }
-        .btn-google:hover {
-          border-color: #94a3b8;
-          background: #ffffff;
-          transform: translateY(-1px);
-        }
-        .btn-google svg {
-          width: 18px;
-          height: 18px;
-          flex-shrink: 0;
-        }
+        .btn-google:hover { background: #f8fafc; }
+        .btn-google svg { width: 18px; height: 18px; }
 
         .footer-text {
           text-align: center;
-          font-size: 0.85rem;
+          font-size: 0.8rem;
           color: #475569;
-          font-weight: 500;
-          margin-top: 18px;
+          margin-top: 20px;
         }
         .footer-text a {
           color: #2563eb;
@@ -500,45 +456,23 @@ const Register = () => {
           font-weight: 600;
         }
         .footer-text a:hover { text-decoration: underline; }
-
-        @media (max-width: 480px) {
-          .register-body { padding: 16px 12px; }
-          .card {
-            padding: 20px 18px 24px;
-            border-radius: 18px;
-            max-width: 100%;
-          }
-          .card-title { font-size: 1.6rem; }
-          .field-group { flex-direction: column; gap: 0; }
-          input[type="text"],
-          input[type="email"],
-          input[type="password"],
-          select {
-            padding: 10px 14px 10px 40px;
-            font-size: 0.85rem;
-          }
-          .input-wrap .ico { left: 12px; width: 17px; height: 17px; }
-          .toggle-pwd svg { width: 17px; height: 17px; }
-        }
-
-        @media (prefers-reduced-motion: reduce) {
-          * {
-            animation-duration: 0.01ms !important;
-            transition-duration: 0.01ms !important;
-          }
-        }
       `}</style>
 
       <div className="register-body">
         <main className="card">
-          <h1 className="card-title">Inscription</h1>
-          <p className="card-sub">Créez votre compte pour accéder à l'application</p>
+          <div className="logo-area">
+            <div className="logo-icon">FCE</div>
+            <div className="logo-text">
+              <h2>Créer un compte</h2>
+              <p>Réseau Ferroviaire Fianarantsoa Côte Est</p>
+            </div>
+          </div>
 
-          {submitSuccess && <div className="submit-message success">{submitSuccess}</div>}
-          {submitError && <div className="submit-message error">{submitError}</div>}
+          {submitError && <div className="alert error">{submitError}</div>}
+          {submitSuccess && <div className="alert success">{submitSuccess}</div>}
 
-          <form onSubmit={handleSubmit} noValidate>
-            <div className="field-group">
+          <form onSubmit={handleSubmit}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div className="field">
                 <label className="field-label" htmlFor="nom">Nom</label>
                 <div className="input-wrap">
@@ -549,13 +483,14 @@ const Register = () => {
                   <input
                     type="text"
                     id="nom"
-                    placeholder="Dupont"
+                    placeholder="Votre nom"
                     value={nom}
                     onChange={(e) => setNom(e.target.value)}
                     required
                   />
                 </div>
               </div>
+
               <div className="field">
                 <label className="field-label" htmlFor="prenom">Prénom</label>
                 <div className="input-wrap">
@@ -566,7 +501,7 @@ const Register = () => {
                   <input
                     type="text"
                     id="prenom"
-                    placeholder="Jean"
+                    placeholder="Votre prénom"
                     value={prenom}
                     onChange={(e) => setPrenom(e.target.value)}
                     required
@@ -576,7 +511,7 @@ const Register = () => {
             </div>
 
             <div className="field">
-              <label className="field-label" htmlFor="email">Adresse email</label>
+              <label className="field-label" htmlFor="email">Email</label>
               <div className="input-wrap">
                 <svg className="ico" viewBox="0 0 24 24">
                   <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
@@ -585,7 +520,7 @@ const Register = () => {
                 <input
                   type="email"
                   id="email"
-                  placeholder="jean.dupont@fce.mg"
+                  placeholder="votre.email@fce.mg"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
@@ -597,20 +532,26 @@ const Register = () => {
               <label className="field-label" htmlFor="role">Poste / Rôle</label>
               <div className="input-wrap">
                 <svg className="ico" viewBox="0 0 24 24">
-                  <rect x="2" y="7" width="20" height="14" rx="2" />
-                  <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
+                  <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                  <circle cx="8.5" cy="7" r="4" />
+                  <line x1="20" y1="8" x2="20" y2="14" />
+                  <line x1="23" y1="11" x2="17" y2="11" />
                 </svg>
                 <select
                   id="role"
                   value={role}
-                  onChange={(e) => setRole(e.target.value)}
+                  onChange={(e) => {
+                    setRole(e.target.value);
+                    setSection('');
+                    setBrigade('');
+                  }}
                   required
                 >
-                  <option value="">Sélectionnez votre poste</option>
-                  <option value="GL">GL – Garde Ligne</option>
-                  <option value="CN">CN – Cantonnier</option>
-                  <option value="CHEF_BRIGADE">CHEF_BRIGADE – Chef de Brigade</option>
-                  <option value="CHEF_SECTION">CHEF_SECTION – Chef de Section</option>
+                  <option value="">Sélectionnez votre rôle</option>
+                  <option value="CHEF_SECTION">Chef de Section</option>
+                  <option value="CHEF_BRIGADE">Chef de Brigade</option>
+                  <option value="GL">Garde Ligne (GL)</option>
+                  <option value="CN">Cantonnier (CN)</option>
                 </select>
               </div>
             </div>
@@ -631,7 +572,7 @@ const Register = () => {
                   >
                     <option value="">Sélectionnez votre section</option>
                     {sections.map(s => (
-                      <option key={s.id} value={s.id}>{s.nom}</option>
+                      <option key={s.id} value={s.id}>{s.nom} ({s.code})</option>
                     ))}
                   </select>
                 </div>
@@ -641,21 +582,24 @@ const Register = () => {
             {role && role !== 'CHEF_SECTION' && (
               <>
                 <div className="field">
-                  <label className="field-label" htmlFor="section">Section</label>
+                  <label className="field-label" htmlFor="section_parent">Section de rattachement</label>
                   <div className="input-wrap">
                     <svg className="ico" viewBox="0 0 24 24">
                       <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
                       <circle cx="12" cy="10" r="3" />
                     </svg>
                     <select
-                      id="section"
+                      id="section_parent"
                       value={section}
-                      onChange={(e) => setSection(e.target.value)}
+                      onChange={(e) => {
+                        setSection(e.target.value);
+                        setBrigade('');
+                      }}
                       required
                     >
-                      <option value="">Sélectionnez votre section</option>
+                      <option value="">Sélectionnez d'abord votre section</option>
                       {sections.map(s => (
-                        <option key={s.id} value={s.id}>{s.nom}</option>
+                        <option key={s.id} value={s.id}>{s.nom} ({s.code})</option>
                       ))}
                     </select>
                   </div>

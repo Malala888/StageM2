@@ -11,21 +11,21 @@ import ServiceUsers, { serviceUsersLoader, ServiceUsersError } from './pages/Ser
 import ServiceRapports, { serviceRapportsLoader, ServiceRapportsError } from './pages/ServiceRapports';
 import ServiceParametres, { serviceParametresLoader, ServiceParametresError } from './pages/ServiceParametres';
 // Chef de Section
-import SectionDashboard from './pages/SectionDashboard';
-import SectionMateriels from './pages/SectionMateriels';
-import SectionMouvements from './pages/SectionMouvements';
-import SectionStock from './pages/SectionStock';
-import SectionUsers from './pages/SectionUsers';
-import SectionRapports from './pages/SectionRapports';
-import SectionParametres from './pages/SectionParametres';
+import SectionDashboard, { sectionDashboardLoader, SectionDashboardError } from './pages/SectionDashboard';
+import SectionMateriels, { sectionMaterielsLoader, SectionMaterielsError } from './pages/SectionMateriels';
+import SectionMouvements, { sectionMouvementsLoader, SectionMouvementsError } from './pages/SectionMouvements';
+import SectionStock, { sectionStockLoader, SectionStockError } from './pages/SectionStock';
+import SectionUsers, { sectionUsersLoader, SectionUsersError } from './pages/SectionUsers';
+import SectionRapports, { sectionRapportsLoader, SectionRapportsError } from './pages/SectionRapports';
+import SectionParametres, { sectionParametresLoader, SectionParametresError } from './pages/SectionParametres';
 // Chef de Brigade
-import BrigadeDashboard from './pages/BrigadeDashboard';
-import BrigadeMateriels from './pages/BrigadeMateriels';
-import BrigadeMouvements from './pages/BrigadeMouvements';
-import BrigadeStock from './pages/BrigadeStock';
-import BrigadeUsers from './pages/BrigadeUsers';
-import BrigadeRapports from './pages/BrigadeRapports';
-import BrigadeParametres from './pages/BrigadeParametres';
+import BrigadeDashboard, { brigadeDashboardLoader, BrigadeDashboardError } from './pages/BrigadeDashboard';
+import BrigadeMateriels, { brigadeMaterielsLoader, BrigadeMaterielsError } from './pages/BrigadeMateriels';
+import BrigadeMouvements, { brigadeMouvementsLoader, BrigadeMouvementsError } from './pages/BrigadeMouvements';
+import BrigadeStock, { brigadeStockLoader, BrigadeStockError } from './pages/BrigadeStock';
+import BrigadeUsers, { brigadeUsersLoader, BrigadeUsersError } from './pages/BrigadeUsers';
+import BrigadeRapports, { brigadeRapportsLoader, BrigadeRapportsError } from './pages/BrigadeRapports';
+import BrigadeParametres, { brigadeParametresLoader, BrigadeParametresError } from './pages/BrigadeParametres';
 // Garde Ligne
 import GLDashboard from './pages/GLDashboard';
 import GLMateriels from './pages/GLMateriels';
@@ -131,22 +131,92 @@ const router = createBrowserRouter([
       },
 
       // Chef de Section
-      { path: '/section/dashboard', element: <SectionDashboard /> },
-      { path: '/section/materiels', element: <SectionMateriels /> },
-      { path: '/section/mouvements', element: <SectionMouvements /> },
-      { path: '/section/stock', element: <SectionStock /> },
-      { path: '/section/users', element: <SectionUsers /> },
-      { path: '/section/rapports', element: <SectionRapports /> },
-      { path: '/section/parametres', element: <SectionParametres /> },
+      {
+        path: '/section/dashboard',
+        element: <SectionDashboard />,
+        loader: sectionDashboardLoader,
+        errorElement: <SectionDashboardError />,
+      },
+      {
+        path: '/section/materiels',
+        element: <SectionMateriels />,
+        loader: sectionMaterielsLoader,
+        errorElement: <SectionMaterielsError />,
+      },
+      {
+        path: '/section/mouvements',
+        element: <SectionMouvements />,
+        loader: sectionMouvementsLoader,
+        errorElement: <SectionMouvementsError />,
+      },
+      {
+        path: '/section/stock',
+        element: <SectionStock />,
+        loader: sectionStockLoader,
+        errorElement: <SectionStockError />,
+      },
+      {
+        path: '/section/users',
+        element: <SectionUsers />,
+        loader: sectionUsersLoader,
+        errorElement: <SectionUsersError />,
+      },
+      {
+        path: '/section/rapports',
+        element: <SectionRapports />,
+        loader: sectionRapportsLoader,
+        errorElement: <SectionRapportsError />,
+      },
+      {
+        path: '/section/parametres',
+        element: <SectionParametres />,
+        loader: sectionParametresLoader,
+        errorElement: <SectionParametresError />,
+      },
 
       // Chef de Brigade
-      { path: '/brigade/dashboard', element: <BrigadeDashboard /> },
-      { path: '/brigade/materiels', element: <BrigadeMateriels /> },
-      { path: '/brigade/mouvements', element: <BrigadeMouvements /> },
-      { path: '/brigade/stock', element: <BrigadeStock /> },
-      { path: '/brigade/users', element: <BrigadeUsers /> },
-      { path: '/brigade/rapports', element: <BrigadeRapports /> },
-      { path: '/brigade/parametres', element: <BrigadeParametres /> },
+      {
+        path: '/brigade/dashboard',
+        element: <BrigadeDashboard />,
+        loader: brigadeDashboardLoader,
+        errorElement: <BrigadeDashboardError />,
+      },
+      {
+        path: '/brigade/materiels',
+        element: <BrigadeMateriels />,
+        loader: brigadeMaterielsLoader,
+        errorElement: <BrigadeMaterielsError />,
+      },
+      {
+        path: '/brigade/mouvements',
+        element: <BrigadeMouvements />,
+        loader: brigadeMouvementsLoader,
+        errorElement: <BrigadeMouvementsError />,
+      },
+      {
+        path: '/brigade/stock',
+        element: <BrigadeStock />,
+        loader: brigadeStockLoader,
+        errorElement: <BrigadeStockError />,
+      },
+      {
+        path: '/brigade/users',
+        element: <BrigadeUsers />,
+        loader: brigadeUsersLoader,
+        errorElement: <BrigadeUsersError />,
+      },
+      {
+        path: '/brigade/rapports',
+        element: <BrigadeRapports />,
+        loader: brigadeRapportsLoader,
+        errorElement: <BrigadeRapportsError />,
+      },
+      {
+        path: '/brigade/parametres',
+        element: <BrigadeParametres />,
+        loader: brigadeParametresLoader,
+        errorElement: <BrigadeParametresError />,
+      },
 
       // Garde Ligne
       { path: '/gl/dashboard', element: <GLDashboard /> },

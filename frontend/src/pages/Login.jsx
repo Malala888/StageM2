@@ -41,27 +41,12 @@ const Login = () => {
             else navigate('/');
 
         } catch (err) {
-            setError('Email ou mot de passe incorrect');
+            const msg = err.response?.data?.detail || 'Email ou mot de passe incorrect';
+            setError(msg);
             console.error(err);
         } finally {
             setLoading(false);
         }
-    };
-
-    const checkStrength = (value) => {
-        let score = 0;
-        if (value.length >= 8) score++;
-        if (/[A-Z]/.test(value)) score++;
-        if (/[0-9]/.test(value)) score++;
-        if (/[^A-Za-z0-9]/.test(value)) score++;
-        // Pour l'affichage, on garde l'état pour la barre (si vous voulez)
-        // Mais on ne l'utilise pas dans ce formulaire.
-    };
-
-    const handlePasswordChange = (e) => {
-        const value = e.target.value;
-        setPassword(value);
-        checkStrength(value);
     };
 
     const togglePassword = () => setShowPassword(!showPassword);
@@ -69,8 +54,7 @@ const Login = () => {
     return (
         <>
             <style>{`
-                /* Vos styles CSS existants (inchangés) */
-                /* La police Inter est maintenant chargée depuis index.html */
+                @import url('https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap');
 
                 *, *::before, *::after {
                     box-sizing: border-box;
@@ -173,7 +157,6 @@ const Login = () => {
                     stroke: #2563eb;
                 }
 
-                input[type="text"],
                 input[type="email"],
                 input[type="password"] {
                     width: 100%;
@@ -316,6 +299,41 @@ const Login = () => {
                     flex-shrink: 0;
                 }
 
+                .row-between {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    margin: 4px 0 2px;
+                }
+                .remember {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    font-size: 0.85rem;
+                    font-weight: 500;
+                    color: #475569;
+                    cursor: pointer;
+                    user-select: none;
+                }
+                .remember input[type="checkbox"] {
+                    width: 16px;
+                    height: 16px;
+                    accent-color: #2563eb;
+                    cursor: pointer;
+                    margin: 0;
+                }
+                a.link {
+                    font-size: 0.85rem;
+                    font-weight: 600;
+                    color: #2563eb;
+                    text-decoration: none;
+                    transition: color 0.15s;
+                }
+                a.link:hover {
+                    color: #1d4ed8;
+                    text-decoration: underline;
+                }
+
                 .footer-text {
                     text-align: center;
                     font-size: 0.85rem;
@@ -350,17 +368,7 @@ const Login = () => {
                     <div className="field">
                         <label className="field-label" htmlFor="email">Email</label>
                         <div className="input-wrap">
-                            <svg
-                                className="ico"
-                                viewBox="0 0 24 24"
-                                width="18"
-                                height="18"
-                                fill="none"
-                                stroke="#94a3b8"
-                                strokeWidth="2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                            >
+                            <svg className="ico" viewBox="0 0 24 24">
                                 <circle cx="12" cy="8" r="4" />
                                 <path d="M4 20c0-4 3.58-7 8-7s8 3 8 7" />
                             </svg>
@@ -378,17 +386,7 @@ const Login = () => {
                     <div className="field">
                         <label className="field-label" htmlFor="password">Mot de passe</label>
                         <div className="input-wrap">
-                            <svg
-                                className="ico"
-                                viewBox="0 0 24 24"
-                                width="18"
-                                height="18"
-                                fill="none"
-                                stroke="#94a3b8"
-                                strokeWidth="2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                            >
+                            <svg className="ico" viewBox="0 0 24 24">
                                 <rect x="5" y="10" width="14" height="11" rx="2" />
                                 <path d="M8 10V7a4 4 0 0 1 8 0v3" />
                             </svg>
@@ -397,7 +395,7 @@ const Login = () => {
                                 id="password"
                                 placeholder="••••••••"
                                 value={password}
-                                onChange={handlePasswordChange}
+                                onChange={(e) => setPassword(e.target.value)}
                                 required
                             />
                             <button
@@ -406,16 +404,7 @@ const Login = () => {
                                 onClick={togglePassword}
                                 aria-label="Afficher/masquer le mot de passe"
                             >
-                                <svg
-                                    viewBox="0 0 24 24"
-                                    width="18"
-                                    height="18"
-                                    fill="none"
-                                    stroke="#94a3b8"
-                                    strokeWidth="2"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                >
+                                <svg viewBox="0 0 24 24">
                                     {showPassword ? (
                                         <>
                                             <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
@@ -451,7 +440,7 @@ const Login = () => {
                 <div className="divider">ou</div>
 
                 <button className="btn-google" type="button">
-                    <svg viewBox="0 0 24 24" fill="none" width="18" height="18">
+                    <svg viewBox="0 0 24 24" fill="none">
                         <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
                         <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
                         <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05" />

@@ -1,17 +1,117 @@
 import React, { useState } from 'react';
+import { useLoaderData, useRouteError } from 'react-router-dom';
 import BrigadeSidebar from '../components/BrigadeSidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
+// ─── Cache mémoire ───
+let brigadeParametresCache = null;
+let brigadeParametresCacheTime = 0;
+const CACHE_TTL_MS = 15000;
+
+async function fetchBrigadeParametresData() {
+  const now = Date.now();
+  if (brigadeParametresCache && now - brigadeParametresCacheTime < CACHE_TTL_MS) {
+    return brigadeParametresCache;
+  }
+
+  const [{ data: userData }, { data: brigades }] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/personnel/brigades/'),
+  ]);
+
+  // Récupérer le nom de la brigade du chef (user.brigade n'est qu'un ID renvoyé par l'API)
+  const brigadeObj = brigades.find(b => b.id === userData.brigade);
+  const brigadeName = brigadeObj?.nom || 'N/A';
+
+  const result = { user: userData, brigadeName };
+  brigadeParametresCache = result;
+  brigadeParametresCacheTime = now;
+  return result;
+}
+
+// ─── Loader ───
+export async function brigadeParametresLoader() {
+  return fetchBrigadeParametresData();
+}
+
+// ─── ErrorElement ───
+export function BrigadeParametresError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement des paramètres:', error);
+  return (
+    <div className="parametres-body">
+      <div className="app">
+        <BrigadeSidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh', flexDirection: 'column' }}>
+          <h2 style={{ color: 'red' }}>Erreur</h2>
+          <p>Impossible de charger les données. Veuillez réessayer.</p>
+          <button className="btn-sm primary" onClick={() => window.location.reload()}>Réessayer</button>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── Composant principal ───
 const BrigadeParametres = () => {
-  // ─── States ───
-  const [emailContact, setEmailContact] = useState('contact.brfi@fce.mg');
-  const [telephone, setTelephone] = useState('+261 34 12 345 67');
-  const [adresse, setAdresse] = useState('Fianarantsoa, Madagascar');
+  const { user: initialUser, brigadeName } = useLoaderData();
+
+  // ─── États du formulaire ───
+  const [nom, setNom] = useState(initialUser?.nom || '');
+  const [prenom, setPrenom] = useState(initialUser?.prenom || '');
+  const [email, setEmail] = useState(initialUser?.email || '');
+  const [telephone, setTelephone] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [updateSuccess, setUpdateSuccess] = useState('');
+  const [updateError, setUpdateError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // ─── Handlers ───
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    alert('💾 Paramètres enregistrés avec succès !');
+    setUpdateError('');
+    setUpdateSuccess('');
+    setIsSubmitting(true);
+
+    if (newPassword && newPassword !== confirmPassword) {
+      setUpdateError('Les mots de passe ne correspondent pas');
+      setIsSubmitting(false);
+      return;
+    }
+
+    try {
+      // 1. Mettre à jour le profil (nom, prénom, email)
+      const payload = { nom, prenom, email };
+      await api.patch(`/accounts/users/${initialUser.id}/`, payload);
+
+      // 2. Changer le mot de passe si demandé
+      if (newPassword && currentPassword) {
+        await api.post('/accounts/change-password/', {
+          old_password: currentPassword,
+          new_password: newPassword,
+        });
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+      }
+
+      setUpdateSuccess('✅ Profil mis à jour avec succès !');
+
+      // Mettre à jour l'utilisateur dans le cache local
+      initialUser.nom = nom;
+      initialUser.prenom = prenom;
+      initialUser.email = email;
+
+    } catch (err) {
+      console.error(err);
+      const msg = err.response?.data?.detail || err.response?.data?.message || 'Erreur lors de la mise à jour du profil';
+      setUpdateError(`❌ ${msg}`);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -62,13 +162,12 @@ const BrigadeParametres = () => {
         .app {
           position: relative;
           z-index: 1;
-          display: block;          /* plus de flex, sidebar fixed */
+          display: block;
           min-height: 100vh;
         }
 
-        /* ─── Le main est décalé pour la sidebar fixed ─── */
         .main {
-          margin-left: 240px;      /* largeur de la sidebar */
+          margin-left: 240px;
           padding: 28px 36px;
           min-height: 100vh;
         }
@@ -169,8 +268,7 @@ const BrigadeParametres = () => {
           letter-spacing: 0.05em;
           color: #475569;
         }
-        .form-grid .field input,
-        .form-grid .field textarea {
+        .form-grid .field input {
           padding: 10px 14px;
           border-radius: 10px;
           border: 1.5px solid #e2e8f0;
@@ -180,8 +278,7 @@ const BrigadeParametres = () => {
           outline: none;
           transition: border-color 0.2s, box-shadow 0.2s;
         }
-        .form-grid .field input:focus,
-        .form-grid .field textarea:focus {
+        .form-grid .field input:focus {
           border-color: #2563eb;
           box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
         }
@@ -189,10 +286,6 @@ const BrigadeParametres = () => {
           background: #f1f5f9;
           color: #64748b;
           cursor: not-allowed;
-        }
-        .form-grid .field textarea {
-          resize: vertical;
-          min-height: 80px;
         }
         .form-grid .field .help {
           font-size: 0.7rem;
@@ -222,15 +315,28 @@ const BrigadeParametres = () => {
           border-top: 1px solid #e2e8f0;
         }
 
-        /* ─── Responsive ─── */
+        .success-message {
+          color: #16a34a;
+          background: #dcfce7;
+          padding: 10px 14px;
+          border-radius: 8px;
+          margin-bottom: 12px;
+          font-size: 0.9rem;
+        }
+        .error-message {
+          color: #dc2626;
+          background: #fee2e2;
+          padding: 10px 14px;
+          border-radius: 8px;
+          margin-bottom: 12px;
+          font-size: 0.9rem;
+        }
+
         @media (max-width: 1024px) {
           .main { margin-left: 200px; padding: 20px 24px; }
         }
         @media (max-width: 768px) {
-          .main {
-            margin-left: 0;        /* la sidebar devient relative ou on garde fixed mais on réduit le padding */
-            padding: 16px;
-          }
+          .main { margin-left: 0; padding: 16px; }
           .page-header { flex-direction: column; align-items: flex-start; gap: 12px; }
           .form-grid { grid-template-columns: 1fr; }
           .form-grid .field.full { grid-column: span 1; }
@@ -239,42 +345,63 @@ const BrigadeParametres = () => {
 
       <div className="parametres-body">
         <div className="app">
-          {/* Sidebar fixed, importée depuis le composant séparé */}
           <BrigadeSidebar />
 
           <main className="main">
             <div className="page-header">
               <div>
-                <h1>Paramètres</h1>
-                <div className="sub">Configuration de la brigade</div>
+                <h1>Paramètres du compte</h1>
+                <div className="sub">
+                  Modifiez vos informations personnelles — Brigade <span className="brigade-badge">{brigadeName}</span>
+                </div>
               </div>
               <div className="user-badge">
-                <div className="avatar">CB</div>
+                <div className="avatar">{initialUser?.nom ? initialUser.nom[0] : 'CB'}</div>
                 <div>
-                  <div className="name">Chef Brigade</div>
+                  <div className="name">{initialUser?.nom || 'Chef'}</div>
                   <div className="role">Chef de Brigade</div>
                 </div>
               </div>
             </div>
 
-            {/* ─── Formulaire ─── */}
             <div className="card">
-              <h3>⚙️ Informations de la brigade</h3>
+              <h3>👤 Modifier mon profil</h3>
+
+              {updateSuccess && <div className="success-message">{updateSuccess}</div>}
+              {updateError && <div className="error-message">{updateError}</div>}
+
               <form onSubmit={handleSubmit}>
                 <div className="form-grid">
-                  <div className="field full">
-                    <label>Brigade</label>
-                    <input type="text" value="BR FI – Brigade Régionale Fianarantsoa" disabled />
-                    <span className="help">Cette information est définie par le Chef de Service.</span>
+                  <div className="field">
+                    <label htmlFor="nom">Nom</label>
+                    <input
+                      type="text"
+                      id="nom"
+                      value={nom}
+                      onChange={(e) => setNom(e.target.value)}
+                      required
+                    />
                   </div>
                   <div className="field">
-                    <label htmlFor="email_contact">Email de contact</label>
+                    <label htmlFor="prenom">Prénom</label>
+                    <input
+                      type="text"
+                      id="prenom"
+                      value={prenom}
+                      onChange={(e) => setPrenom(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="email">Email / Nom d'utilisateur</label>
                     <input
                       type="email"
-                      id="email_contact"
-                      value={emailContact}
-                      onChange={(e) => setEmailContact(e.target.value)}
+                      id="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      required
                     />
+                    <span className="help">L'email vous sert d'identifiant pour la connexion.</span>
                   </div>
                   <div className="field">
                     <label htmlFor="telephone">Téléphone</label>
@@ -283,21 +410,67 @@ const BrigadeParametres = () => {
                       id="telephone"
                       value={telephone}
                       onChange={(e) => setTelephone(e.target.value)}
+                      placeholder="+261 XX XXX XX XX"
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="role">Rôle</label>
+                    <input type="text" id="role" value={initialUser?.role || 'CHEF_BRIGADE'} disabled />
+                    <span className="help">Le rôle ne peut pas être modifié ici.</span>
+                  </div>
+                  <div className="field">
+                    <label htmlFor="brigade">Brigade</label>
+                    <input type="text" id="brigade" value={brigadeName} disabled />
+                    <span className="help">La brigade est attribuée par le Chef de Section.</span>
+                  </div>
+                  <div className="field full">
+                    <label htmlFor="statut">Statut du compte</label>
+                    <input type="text" id="statut" value={initialUser?.statut || 'ACTIF'} disabled />
+                  </div>
+
+                  {/* ─── Changement de mot de passe ─── */}
+                  <div className="field full">
+                    <hr style={{ margin: '8px 0', borderColor: '#e2e8f0' }} />
+                    <label style={{ fontSize: '1rem', textTransform: 'none', color: '#0f172a', fontWeight: 600 }}>
+                      🔐 Changer le mot de passe
+                    </label>
+                  </div>
+                  <div className="field">
+                    <label htmlFor="current_password">Mot de passe actuel</label>
+                    <input
+                      type="password"
+                      id="current_password"
+                      placeholder="••••••••"
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="new_password">Nouveau mot de passe</label>
+                    <input
+                      type="password"
+                      id="new_password"
+                      placeholder="••••••••"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
                     />
                   </div>
                   <div className="field full">
-                    <label htmlFor="adresse">Adresse (optionnel)</label>
-                    <textarea
-                      id="adresse"
-                      rows="2"
-                      value={adresse}
-                      onChange={(e) => setAdresse(e.target.value)}
-                    ></textarea>
+                    <label htmlFor="confirm_password">Confirmer le nouveau mot de passe</label>
+                    <input
+                      type="password"
+                      id="confirm_password"
+                      placeholder="••••••••"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                    />
+                    <span className="help">Laissez les champs de mot de passe vides pour ne pas le modifier.</span>
                   </div>
                 </div>
+
                 <div className="form-actions">
-                  <button type="submit" className="btn-sm primary" style={{ padding: '10px 28px' }}>
-                    💾 Enregistrer
+                  <button type="submit" className="btn-sm primary" style={{ padding: '10px 28px' }} disabled={isSubmitting}>
+                    {isSubmitting ? 'Enregistrement...' : '💾 Mettre à jour le profil'}
                   </button>
                 </div>
               </form>

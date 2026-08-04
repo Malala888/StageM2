@@ -1,12 +1,118 @@
 import React, { useState } from 'react';
+import { useLoaderData, useRouteError } from 'react-router-dom';
 import BrigadeSidebar from '../components/BrigadeSidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
+// ─── Cache mémoire ───
+let brigadeRapportsCache = null;
+let brigadeRapportsCacheTime = 0;
+const CACHE_TTL_MS = 15000;
+
+async function fetchBrigadeRapportsData() {
+  const now = Date.now();
+  if (brigadeRapportsCache && now - brigadeRapportsCacheTime < CACHE_TTL_MS) {
+    return brigadeRapportsCache;
+  }
+
+  const [
+    { data: userData },
+    { data: mouvementsData },
+    { data: stockData },
+    { data: materielsData },
+    { data: usersData },
+    { data: brigades },
+  ] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/materiaux/mouvements/'),
+    api.get('/materiaux/stock/'),
+    api.get('/materiaux/materiels/'),
+    api.get('/accounts/users/'),
+    api.get('/personnel/brigades/'),
+  ]);
+
+  const brigadeId = userData.brigade;
+
+  // Récupérer le nom de la brigade du chef (user.brigade n'est qu'un ID renvoyé par l'API)
+  const brigadeObj = brigades.find(b => b.id === brigadeId);
+  const brigadeName = brigadeObj?.nom || 'N/A';
+
+  // Mouvements de la brigade
+  const mouvementsBrigade = mouvementsData.filter(m => m.brigade === brigadeId);
+
+  // Agents de la brigade
+  const agentsBrigade = usersData.filter(u => u.brigade === brigadeId);
+  const agentsActifs = agentsBrigade.filter(u => u.statut === 'ACTIF');
+
+  // Statistiques
+  const totalMouvements = mouvementsBrigade.length;
+  const empruntsEnCours = mouvementsBrigade.filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS').length;
+  const retards = mouvementsBrigade.filter(m => m.statut === 'EN_RETARD').length;
+
+  // Matériels abîmés : on prend tous les matériels de la brigade ? Ou on se base sur les mouvements ?
+  // On peut prendre les matériels qui apparaissent dans les mouvements de la brigade.
+  const materielsIds = [...new Set(mouvementsBrigade.map(m => m.materiel))];
+  const materielsBrigade = materielsData.filter(m => materielsIds.includes(m.id));
+
+  // Pour les matériels abîmés, on peut compter les quantités en stock avec état MAUVAIS ou HORS_SERVICE pour ces matériels.
+  // Simplification : on prend tous les stocks pour ces matériels.
+  const stocksMateriels = stockData.filter(s => materielsIds.includes(s.materiel));
+  const materielsAbimes = stocksMateriels
+    .filter(s => s.etat === 'MAUVAIS' || s.etat === 'HORS_SERVICE')
+    .reduce((acc, s) => acc + s.quantite, 0);
+
+  // Stock total (pour les matériels de la brigade ? On peut prendre tout le stock, car c'est le stock global de la brigade)
+  const stockTotal = stocksMateriels.reduce((acc, s) => acc + s.quantite, 0);
+
+  // Mouvements du mois (approximatif, on prend les 30 derniers jours)
+  const nowDate = new Date();
+  const moisDebut = new Date(nowDate.getFullYear(), nowDate.getMonth(), 1);
+  const mouvementsMois = mouvementsBrigade.filter(m => new Date(m.date_mouvement) >= moisDebut);
+  const mouvementsMoisCount = mouvementsMois.length;
+
+  const result = {
+    user: userData,
+    totalMouvements,
+    empruntsEnCours,
+    retards,
+    materielsAbimes,
+    stockTotal,
+    agentsActifs: agentsActifs.length,
+    mouvementsMois: mouvementsMoisCount,
+    brigadeName,
+  };
+
+  brigadeRapportsCache = result;
+  brigadeRapportsCacheTime = now;
+  return result;
+}
+
+export async function brigadeRapportsLoader() {
+  return fetchBrigadeRapportsData();
+}
+
+export function BrigadeRapportsError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement des rapports de la brigade:', error);
+  return (
+    <div className="rapports-body">
+      <div className="app">
+        <BrigadeSidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh', flexDirection: 'column' }}>
+          <h2 style={{ color: 'red' }}>Erreur</h2>
+          <p>Impossible de charger les données. Veuillez réessayer.</p>
+          <button className="btn-sm primary" onClick={() => window.location.reload()}>Réessayer</button>
+        </main>
+      </div>
+    </div>
+  );
+}
+
 const BrigadeRapports = () => {
-  // ─── States pour les filtres ───
+  const { user, totalMouvements, empruntsEnCours, retards, materielsAbimes, stockTotal, agentsActifs, mouvementsMois, brigadeName } = useLoaderData();
+
   const [periode, setPeriode] = useState('');
 
-  // ─── Handlers ───
   const handleGenerer = () => {
     alert(`📊 Rapport généré !\nPériode: ${periode || 'Toutes'}`);
   };
@@ -15,8 +121,8 @@ const BrigadeRapports = () => {
     alert('📥 Export PDF en cours...');
   };
 
-  const handleCardClick = (titre) => {
-    alert(`📄 Voir les détails : ${titre}`);
+  const handleCardClick = (titre, detail) => {
+    alert(`📄 ${titre}\n${detail || ''}`);
   };
 
   return (
@@ -67,13 +173,12 @@ const BrigadeRapports = () => {
         .app {
           position: relative;
           z-index: 1;
-          display: block;          /* plus de flex, sidebar fixed */
+          display: block;
           min-height: 100vh;
         }
 
-        /* ─── Le main est décalé pour la sidebar fixed ─── */
         .main {
-          margin-left: 240px;      /* largeur de la sidebar */
+          margin-left: 240px;
           padding: 28px 36px;
           min-height: 100vh;
         }
@@ -220,15 +325,11 @@ const BrigadeRapports = () => {
         .report-card .title { font-weight: 600; color: #0f172a; }
         .report-card .desc { font-size: 0.8rem; color: #94a3b8; margin-top: 4px; }
 
-        /* ─── Responsive ─── */
         @media (max-width: 1024px) {
           .main { margin-left: 200px; padding: 20px 24px; }
         }
         @media (max-width: 768px) {
-          .main {
-            margin-left: 0;        /* la sidebar devient relative ou on garde fixed mais on réduit le padding */
-            padding: 16px;
-          }
+          .main { margin-left: 0; padding: 16px; }
           .page-header { flex-direction: column; align-items: flex-start; gap: 12px; }
           .report-grid { grid-template-columns: 1fr 1fr; }
         }
@@ -239,7 +340,6 @@ const BrigadeRapports = () => {
 
       <div className="rapports-body">
         <div className="app">
-          {/* Sidebar fixed, importée depuis le composant séparé */}
           <BrigadeSidebar />
 
           <main className="main">
@@ -247,13 +347,13 @@ const BrigadeRapports = () => {
               <div>
                 <h1>Rapports</h1>
                 <div className="sub">
-                  Analyses et statistiques — Brigade <span className="brigade-badge">BR FI</span>
+                  Analyses et statistiques — Brigade <span className="brigade-badge">{brigadeName}</span>
                 </div>
               </div>
               <div className="user-badge">
-                <div className="avatar">CB</div>
+                <div className="avatar">{user?.nom ? user.nom[0] : 'CB'}</div>
                 <div>
-                  <div className="name">Chef Brigade</div>
+                  <div className="name">{user?.nom || 'Chef'}</div>
                   <div className="role">Chef de Brigade</div>
                 </div>
               </div>
@@ -281,41 +381,41 @@ const BrigadeRapports = () => {
 
             {/* ─── Cartes de rapports ─── */}
             <div className="report-grid">
-              <div className="report-card" onClick={() => handleCardClick('Emprunts en cours')}>
+              <div className="report-card" onClick={() => handleCardClick('Emprunts en cours', `${empruntsEnCours} matériels actuellement empruntés`)}>
                 <div className="icon">📊</div>
                 <div className="title">Emprunts en cours</div>
-                <div className="desc">8 matériels actuellement empruntés</div>
-                <span className="badge yellow">+2 ce mois</span>
+                <div className="desc">{empruntsEnCours} matériels actuellement empruntés</div>
+                <span className="badge yellow">{empruntsEnCours > 0 ? `+${empruntsEnCours} ce mois` : 'Aucun'}</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Retards')}>
+              <div className="report-card" onClick={() => handleCardClick('Retards', `${retards} retards signalés`)}>
                 <div className="icon">⏰</div>
                 <div className="title">Retards</div>
-                <div className="desc">2 retards signalés</div>
-                <span className="badge red">+1 aujourd'hui</span>
+                <div className="desc">{retards} retards signalés</div>
+                <span className="badge red">{retards > 0 ? `${retards} à traiter` : '✅ Aucun'}</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Matériels abîmés')}>
+              <div className="report-card" onClick={() => handleCardClick('Matériels abîmés', `${materielsAbimes} en mauvais état`)}>
                 <div className="icon">🔧</div>
                 <div className="title">Matériels abîmés</div>
-                <div className="desc">10 en mauvais état</div>
-                <span className="badge orange">+2 ce trim.</span>
+                <div className="desc">{materielsAbimes} en mauvais état</div>
+                <span className="badge orange">{materielsAbimes > 0 ? `+${materielsAbimes} à réparer` : '✅ Bon état'}</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Stock total')}>
+              <div className="report-card" onClick={() => handleCardClick('Stock total', `${stockTotal} unités en stock`)}>
                 <div className="icon">📦</div>
                 <div className="title">Stock total</div>
-                <div className="desc">187 unités en stock</div>
-                <span className="badge green">+5 ce mois</span>
+                <div className="desc">{stockTotal} unités en stock</div>
+                <span className="badge green">{stockTotal > 0 ? `${stockTotal} disponibles` : 'Stock vide'}</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Mouvements')}>
+              <div className="report-card" onClick={() => handleCardClick('Mouvements', `${totalMouvements} opérations au total`)}>
                 <div className="icon">🔄</div>
                 <div className="title">Mouvements</div>
-                <div className="desc">32 opérations ce mois</div>
-                <span className="badge blue">Voir détails</span>
+                <div className="desc">{totalMouvements} opérations au total</div>
+                <span className="badge blue">{mouvementsMois > 0 ? `+${mouvementsMois} ce mois` : 'Aucun'}</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Agents')}>
+              <div className="report-card" onClick={() => handleCardClick('Agents', `${agentsActifs} agents actifs`)}>
                 <div className="icon">👥</div>
-                <div className="title">Agents</div>
-                <div className="desc">18 agents actifs</div>
-                <span className="badge green">+2 ce mois</span>
+                <div className="title">Agents actifs</div>
+                <div className="desc">{agentsActifs} agents actifs</div>
+                <span className="badge green">+{agentsActifs} actifs</span>
               </div>
             </div>
           </main>

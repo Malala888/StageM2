@@ -1,12 +1,172 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import { useLoaderData, useRouteError } from 'react-router-dom';
 import SectionSidebar from '../components/SectionSidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
-const SectionStock = () => {
-  const handleApprovisionner = (materiel) => {
-    alert(`📦 Approvisionner : ${materiel}`);
+// ─── Cache mémoire ───
+let sectionStockCache = null;
+let sectionStockCacheTime = 0;
+const CACHE_TTL_MS = 15000;
+
+async function fetchSectionStockData() {
+  const now = Date.now();
+  if (sectionStockCache && now - sectionStockCacheTime < CACHE_TTL_MS) {
+    return sectionStockCache;
+  }
+
+  const [
+    { data: userData },
+    { data: materielsData },
+    { data: stockData },
+    { data: brigadesData },
+  ] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/materiaux/materiels/'),
+    api.get('/materiaux/stock/'),
+    api.get('/personnel/brigades/'),
+  ]);
+
+  // Filtrer les brigades de la section du chef
+  const sectionId = userData.section;
+  const brigadesSection = brigadesData.filter(b => b.section === sectionId);
+
+  // Pour le stock total par état, on prend tout le stock (car les matériels ne sont pas directement liés à une section)
+  // Mais on peut choisir de ne montrer que les matériels qui ont été approvisionnés dans les brigades de la section.
+  // Pour simplifier, on garde tous les matériels, car le chef de section a une vue globale.
+  // On garde le même calcul que ServiceStock : total par état.
+
+  // On pourrait aussi filtrer par brigade, mais c'est plus complexe. On garde la vue globale.
+
+  // Calcul du stock par état
+  const stockParEtat = stockData.reduce((acc, item) => {
+    acc[item.etat] = (acc[item.etat] || 0) + item.quantite;
+    return acc;
+  }, {});
+
+  // Calcul des quantités totales par matériel
+  const quantitesParMateriel = {};
+  stockData.forEach(s => {
+    if (!quantitesParMateriel[s.materiel]) quantitesParMateriel[s.materiel] = 0;
+    quantitesParMateriel[s.materiel] += s.quantite;
+  });
+
+  // Construire les alertes (matériels dont le total est <= seuil)
+  const alertes = materielsData
+    .map(m => ({
+      ...m,
+      total: quantitesParMateriel[m.id] || 0,
+    }))
+    .filter(m => m.total > 0 && m.total <= m.seuil_alerte)
+    .sort((a, b) => a.total - b.total);
+
+  // Pour chaque alerte, on peut essayer de trouver la brigade correspondante (via le stock ? pas direct)
+  // On affichera la brigade du chef ou une valeur par défaut.
+  // Pour plus de précision, on pourrait lier un matériel à une brigade via les mouvements, mais on simplifie.
+
+  const result = {
+    user: userData,
+    stockParEtat,
+    alertes,
+    materiels: materielsData,
+    stockData,
+    brigades: brigadesSection,
   };
 
+  sectionStockCache = result;
+  sectionStockCacheTime = now;
+  return result;
+}
+
+// ─── Loader ───
+export async function sectionStockLoader() {
+  return fetchSectionStockData();
+}
+
+// ─── ErrorElement ───
+export function SectionStockError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement du stock:', error);
+  return (
+    <div className="stock-body">
+      <div className="app">
+        <SectionSidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh', flexDirection: 'column' }}>
+          <h2 style={{ color: 'red' }}>Erreur</h2>
+          <p>Impossible de charger les données. Veuillez réessayer.</p>
+          <button className="btn-sm primary" onClick={() => window.location.reload()}>Réessayer</button>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── Composant principal ───
+const SectionStock = () => {
+  const { user, stockParEtat, alertes, materiels, stockData, brigades } = useLoaderData();
+
+  // ─── États pour les filtres ───
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filteredAlertes, setFilteredAlertes] = useState(alertes);
+
+  // Appliquer les filtres sur les alertes
+  useEffect(() => {
+    let result = alertes;
+    if (searchTerm.trim()) {
+      result = result.filter(m =>
+        m.nom.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        m.categorie.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+    setFilteredAlertes(result);
+  }, [searchTerm, alertes]);
+
+  // ─── Gérer l'approvisionnement ───
+  const handleApprovisionner = async (materielId, nom) => {
+    const quantite = parseInt(prompt(`Quantité à approvisionner pour "${nom}" :`, '1'));
+    if (!quantite || quantite <= 0) return;
+
+    const etat = prompt(`État (NEUF, BON, MOYEN, MAUVAIS, HORS_SERVICE) :`, 'NEUF') || 'NEUF';
+    if (!['NEUF', 'BON', 'MOYEN', 'MAUVAIS', 'HORS_SERVICE'].includes(etat.toUpperCase())) {
+      alert('État invalide.');
+      return;
+    }
+
+    try {
+      await api.post('/materiaux/mouvements/', {
+        type: 'APPROVISIONNEMENT',
+        materiel: materielId,
+        quantite,
+        date_mouvement: new Date().toISOString().split('T')[0],
+        brigade: user.brigade || null, // Optionnel, on peut laisser vide pour une approvisionnement général
+        commentaire: `Approvisionnement de ${quantite} ${nom} en état ${etat.toUpperCase()}`,
+      });
+      alert(`✅ ${quantite} ${nom} approvisionné(s) avec succès !`);
+      window.location.reload();
+    } catch (err) {
+      console.error(err);
+      alert('❌ Erreur lors de l\'approvisionnement.');
+    }
+  };
+
+  // ─── États possibles ───
+  const etats = ['NEUF', 'BON', 'MOYEN', 'MAUVAIS', 'HORS_SERVICE'];
+  const etatsLabels = {
+    NEUF: 'NEUF',
+    BON: 'BON',
+    MOYEN: 'MOYEN',
+    MAUVAIS: 'MAUVAIS',
+    HORS_SERVICE: 'HORS_SERVICE',
+  };
+  const etatsColors = {
+    NEUF: 'neuf',
+    BON: 'bon',
+    MOYEN: 'moyen',
+    MAUVAIS: 'mauvais',
+    HORS_SERVICE: 'hs',
+  };
+
+  // ─── Rendu ───
   return (
     <>
       <style>{`
@@ -225,6 +385,26 @@ const SectionStock = () => {
         .stock-card .dot.mauvais { background: #f97316; }
         .stock-card .dot.hs { background: #ef4444; }
 
+        .filters {
+          display: flex;
+          gap: 12px;
+          flex-wrap: wrap;
+          margin-bottom: 20px;
+        }
+        .filters input {
+          padding: 8px 14px;
+          border-radius: 10px;
+          border: 1.5px solid #e2e8f0;
+          background: rgba(255,255,255,0.6);
+          font-family: 'Inter', sans-serif;
+          font-size: 0.85rem;
+          outline: none;
+          transition: border-color 0.2s;
+        }
+        .filters input:focus {
+          border-color: #2563eb;
+        }
+
         @media (max-width: 1024px) {
           .main { padding: 20px 24px; max-width: calc(100% - 200px); margin-left: 200px; }
         }
@@ -250,13 +430,13 @@ const SectionStock = () => {
               <div>
                 <h1>État du Stock</h1>
                 <div className="sub">
-                  Vue globale par état — Section <span className="section-badge">Fianarantsoa</span>
+                  Vue globale par état — Section <span className="section-badge">{user?.section?.nom || 'N/A'}</span>
                 </div>
               </div>
               <div className="user-badge">
-                <div className="avatar">CS</div>
+                <div className="avatar">{user?.nom ? user.nom[0] : 'CS'}</div>
                 <div>
-                  <div className="name">Chef Section</div>
+                  <div className="name">{user?.nom || 'Chef'}</div>
                   <div className="role">Chef de Section</div>
                 </div>
               </div>
@@ -264,90 +444,69 @@ const SectionStock = () => {
 
             {/* ─── Stock par état ─── */}
             <div className="stock-grid">
-              <div className="stock-card">
-                <div className="dot neuf"></div>
-                <div className="count">342</div>
-                <div className="label">NEUF</div>
-              </div>
-              <div className="stock-card">
-                <div className="dot bon"></div>
-                <div className="count">587</div>
-                <div className="label">BON</div>
-              </div>
-              <div className="stock-card">
-                <div className="dot moyen"></div>
-                <div className="count">189</div>
-                <div className="label">MOYEN</div>
-              </div>
-              <div className="stock-card">
-                <div className="dot mauvais"></div>
-                <div className="count">76</div>
-                <div className="label">MAUVAIS</div>
-              </div>
-              <div className="stock-card">
-                <div className="dot hs"></div>
-                <div className="count">49</div>
-                <div className="label">HORS_SERVICE</div>
-              </div>
+              {etats.map(etat => (
+                <div className="stock-card" key={etat}>
+                  <div className={`dot ${etatsColors[etat]}`}></div>
+                  <div className="count">{stockParEtat[etat] || 0}</div>
+                  <div className="label">{etatsLabels[etat]}</div>
+                </div>
+              ))}
             </div>
 
             {/* ─── Alertes stock bas ─── */}
             <div className="card">
-              <h3>⚠️ Alertes stock bas</h3>
+              <h3>⚠️ Alertes stock bas ({filteredAlertes.length})</h3>
+              <div className="filters">
+                <input
+                  type="text"
+                  placeholder="🔍 Rechercher un matériel..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+                <button
+                  className="btn-sm outline"
+                  style={{ padding: '8px 20px' }}
+                  onClick={() => setSearchTerm('')}
+                >
+                  Réinitialiser
+                </button>
+              </div>
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
                       <th>Matériel</th>
+                      <th>Catégorie</th>
                       <th>Stock actuel</th>
                       <th>Seuil</th>
-                      <th>Brigade</th>
                       <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
-                    <tr>
-                      <td><strong>Brouette 45L</strong></td>
-                      <td>3</td>
-                      <td>10</td>
-                      <td>BR FI</td>
-                      <td>
-                        <button
-                          className="btn-sm primary"
-                          onClick={() => handleApprovisionner('Brouette 45L')}
-                        >
-                          Approvisionner
-                        </button>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>Échelle 6m</strong></td>
-                      <td>2</td>
-                      <td>5</td>
-                      <td>BOA</td>
-                      <td>
-                        <button
-                          className="btn-sm primary"
-                          onClick={() => handleApprovisionner('Échelle 6m')}
-                        >
-                          Approvisionner
-                        </button>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>Perceuse Bosh</strong></td>
-                      <td>4</td>
-                      <td>8</td>
-                      <td>BR ADV</td>
-                      <td>
-                        <button
-                          className="btn-sm primary"
-                          onClick={() => handleApprovisionner('Perceuse Bosh')}
-                        >
-                          Approvisionner
-                        </button>
-                      </td>
-                    </tr>
+                    {filteredAlertes.length === 0 ? (
+                      <tr>
+                        <td colSpan="5" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
+                          ✅ Aucune alerte stock bas
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredAlertes.map(m => (
+                        <tr key={m.id}>
+                          <td><strong>{m.nom}</strong></td>
+                          <td>{m.categorie}</td>
+                          <td>{m.total}</td>
+                          <td>{m.seuil_alerte}</td>
+                          <td>
+                            <button
+                              className="btn-sm primary"
+                              onClick={() => handleApprovisionner(m.id, m.nom)}
+                            >
+                              Approvisionner
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>

@@ -1,9 +1,86 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useLoaderData, useRouteError } from 'react-router-dom';
 import SectionSidebar from '../components/SectionSidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
+// ─── Cache mémoire ───
+let sectionMouvementsCache = null;
+let sectionMouvementsCacheTime = 0;
+const CACHE_TTL_MS = 15000;
+
+async function fetchSectionMouvementsData() {
+  const now = Date.now();
+  if (sectionMouvementsCache && now - sectionMouvementsCacheTime < CACHE_TTL_MS) {
+    return sectionMouvementsCache;
+  }
+
+  const [
+    { data: userData },
+    { data: materielsData },
+    { data: usersData },
+    { data: brigadesData },
+    { data: mouvementsData },
+  ] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/materiaux/materiels/'),
+    api.get('/accounts/users/'),
+    api.get('/personnel/brigades/'),
+    api.get('/materiaux/mouvements/'),
+  ]);
+
+  // Filtrer les agents (GL et CN) pour le formulaire
+  const agents = usersData.filter(u => u.role === 'GL' || u.role === 'CN');
+
+  // Filtrer les mouvements par section du chef (via les brigades de sa section)
+  const sectionId = userData.section;
+  const brigadesSection = brigadesData.filter(b => b.section === sectionId);
+  const brigadeIds = brigadesSection.map(b => b.id);
+
+  // Mouvements de la section
+  const mouvementsSection = mouvementsData.filter(m => brigadeIds.includes(m.brigade));
+
+  const result = {
+    user: userData,
+    materiels: materielsData,
+    agents,
+    brigades: brigadesSection, // seulement les brigades de la section
+    mouvements: mouvementsSection,
+  };
+
+  sectionMouvementsCache = result;
+  sectionMouvementsCacheTime = now;
+  return result;
+}
+
+// ─── Loader ───
+export async function sectionMouvementsLoader() {
+  return fetchSectionMouvementsData();
+}
+
+// ─── ErrorElement ───
+export function SectionMouvementsError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement des mouvements:', error);
+  return (
+    <div className="mouvements-body">
+      <div className="app">
+        <SectionSidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh', flexDirection: 'column' }}>
+          <h2 style={{ color: 'red' }}>Erreur</h2>
+          <p>Impossible de charger les données. Veuillez réessayer.</p>
+          <button className="btn-sm primary" onClick={() => window.location.reload()}>Réessayer</button>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── Composant principal ───
 const SectionMouvements = () => {
-  // ─── States pour le formulaire ───
+  const { user, materiels, agents, brigades, mouvements: initialMouvements } = useLoaderData();
+
+  // ─── États pour le formulaire ───
   const [type, setType] = useState('');
   const [materiel, setMateriel] = useState('');
   const [agent, setAgent] = useState('');
@@ -12,11 +89,16 @@ const SectionMouvements = () => {
   const [brigade, setBrigade] = useState('');
   const [commentaire, setCommentaire] = useState('');
 
-  // ─── States pour les filtres ───
+  // ─── États pour les filtres ───
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('');
   const [filterBrigade, setFilterBrigade] = useState('');
   const [filterDate, setFilterDate] = useState('');
+  const [filteredMouvements, setFilteredMouvements] = useState(initialMouvements);
+
+  // ─── États pour la soumission ───
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
 
   // ─── Référence pour le champ date ───
   const dateInputRef = useRef(null);
@@ -30,28 +112,101 @@ const SectionMouvements = () => {
     }
   }, []);
 
-  // ─── Handlers ───
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    alert('✅ Mouvement enregistré avec succès !');
-    // Réinitialiser le formulaire
-    setType('');
-    setMateriel('');
-    setAgent('');
-    setQuantite(1);
-    setBrigade('');
-    setCommentaire('');
-  };
+  // ─── Appliquer les filtres ───
+  useEffect(() => {
+    let result = initialMouvements;
 
+    if (searchTerm.trim()) {
+      result = result.filter(m =>
+        (m.materiel?.nom || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (m.agent_concerner?.nom || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (m.agent_concerner?.prenom || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        m.numero.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+
+    if (filterType) {
+      result = result.filter(m => m.type === filterType);
+    }
+
+    if (filterBrigade) {
+      result = result.filter(m => m.brigade === parseInt(filterBrigade));
+    }
+
+    if (filterDate) {
+      result = result.filter(m => m.date_mouvement === filterDate);
+    }
+
+    setFilteredMouvements(result);
+  }, [searchTerm, filterType, filterBrigade, filterDate, initialMouvements]);
+
+  // ─── Handlers ───
   const handleFilter = (e) => {
     e.preventDefault();
-    alert('Filtres appliqués !');
+  };
+
+  const handleResetFilters = () => {
+    setSearchTerm('');
+    setFilterType('');
+    setFilterBrigade('');
+    setFilterDate('');
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSubmitError('');
+    setSubmitting(true);
+
+    if (!type || !materiel || !quantite || !date || !brigade) {
+      setSubmitError('Veuillez remplir tous les champs obligatoires.');
+      setSubmitting(false);
+      return;
+    }
+
+    const payload = {
+      type,
+      materiel: parseInt(materiel),
+      quantite,
+      date_mouvement: date,
+      brigade: parseInt(brigade),
+      commentaire: commentaire || '',
+    };
+
+    if (agent) {
+      payload.agent_concerner = parseInt(agent);
+    }
+
+    try {
+      await api.post('/materiaux/mouvements/', payload);
+      alert('✅ Mouvement enregistré avec succès !');
+      // Réinitialiser le formulaire
+      setType('');
+      setMateriel('');
+      setAgent('');
+      setQuantite(1);
+      setBrigade('');
+      setCommentaire('');
+
+      // Recharger les mouvements
+      const { data: newMouvements } = await api.get('/materiaux/mouvements/');
+      // Filtrer par section
+      const sectionId = user.section;
+      const brigadesSection = await api.get('/personnel/brigades/').then(res => res.data.filter(b => b.section === sectionId));
+      const brigadeIds = brigadesSection.map(b => b.id);
+      setFilteredMouvements(newMouvements.filter(m => brigadeIds.includes(m.brigade)));
+    } catch (err) {
+      console.error(err);
+      setSubmitError('Erreur lors de l\'enregistrement du mouvement.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleDetail = (numero) => {
     alert(`📄 Détail du mouvement : ${numero}`);
   };
 
+  // ─── Rendu ───
   return (
     <>
       <style>{`
@@ -316,6 +471,12 @@ const SectionMouvements = () => {
           border-color: #2563eb;
         }
 
+        .submit-error {
+          color: #dc2626;
+          font-size: 0.85rem;
+          margin-top: 8px;
+        }
+
         @media (max-width: 1024px) {
           .main { padding: 20px 24px; max-width: calc(100% - 200px); margin-left: 200px; }
         }
@@ -338,13 +499,13 @@ const SectionMouvements = () => {
               <div>
                 <h1>Mouvements</h1>
                 <div className="sub">
-                  Enregistrer et consulter l'historique — Section <span className="section-badge">Fianarantsoa</span>
+                  Enregistrer et consulter l'historique — Section <span className="section-badge">{user?.section?.nom || 'N/A'}</span>
                 </div>
               </div>
               <div className="user-badge">
-                <div className="avatar">CS</div>
+                <div className="avatar">{user?.nom ? user.nom[0] : 'CS'}</div>
                 <div>
-                  <div className="name">Chef Section</div>
+                  <div className="name">{user?.nom || 'Chef'}</div>
                   <div className="role">Chef de Section</div>
                 </div>
               </div>
@@ -356,7 +517,7 @@ const SectionMouvements = () => {
               <form onSubmit={handleSubmit}>
                 <div className="form-row">
                   <div className="field">
-                    <label htmlFor="type">Type de mouvement</label>
+                    <label htmlFor="type">Type de mouvement *</label>
                     <select
                       id="type"
                       value={type}
@@ -373,7 +534,7 @@ const SectionMouvements = () => {
                     </select>
                   </div>
                   <div className="field">
-                    <label htmlFor="materiel">Matériel</label>
+                    <label htmlFor="materiel">Matériel *</label>
                     <select
                       id="materiel"
                       value={materiel}
@@ -381,11 +542,9 @@ const SectionMouvements = () => {
                       required
                     >
                       <option value="">Sélectionner</option>
-                      <option value="1">Pelle DS-12</option>
-                      <option value="2">Brouette 45L</option>
-                      <option value="3">Perceuse Bosh</option>
-                      <option value="4">Groupe électrogène</option>
-                      <option value="5">Échelle 6m</option>
+                      {materiels.map(m => (
+                        <option key={m.id} value={m.id}>{m.nom}</option>
+                      ))}
                     </select>
                   </div>
                   <div className="field">
@@ -394,17 +553,15 @@ const SectionMouvements = () => {
                       id="agent"
                       value={agent}
                       onChange={(e) => setAgent(e.target.value)}
-                      required
                     >
                       <option value="">Sélectionner</option>
-                      <option value="1">Rakoto Jean (GL - BR FI)</option>
-                      <option value="2">Ranaivo Marie (CN - BOA)</option>
-                      <option value="3">Andry R. (GL - BR ADV)</option>
-                      <option value="4">Razafy L. (Chef BOA)</option>
+                      {agents.map(a => (
+                        <option key={a.id} value={a.id}>{a.nom} {a.prenom} ({a.role})</option>
+                      ))}
                     </select>
                   </div>
                   <div className="field">
-                    <label htmlFor="quantite">Quantité</label>
+                    <label htmlFor="quantite">Quantité *</label>
                     <input
                       type="number"
                       id="quantite"
@@ -417,7 +574,7 @@ const SectionMouvements = () => {
                 </div>
                 <div className="form-row">
                   <div className="field">
-                    <label htmlFor="date">Date</label>
+                    <label htmlFor="date">Date *</label>
                     <input
                       type="date"
                       id="date"
@@ -428,7 +585,7 @@ const SectionMouvements = () => {
                     />
                   </div>
                   <div className="field">
-                    <label htmlFor="brigade">Brigade</label>
+                    <label htmlFor="brigade">Brigade *</label>
                     <select
                       id="brigade"
                       value={brigade}
@@ -436,10 +593,9 @@ const SectionMouvements = () => {
                       required
                     >
                       <option value="">Sélectionner</option>
-                      <option value="BOA">BOA</option>
-                      <option value="BR FI">BR FI</option>
-                      <option value="BR ADV">BR ADV</option>
-                      <option value="BR TLG">BR TLG</option>
+                      {brigades.map(b => (
+                        <option key={b.id} value={b.id}>{b.nom} ({b.code})</option>
+                      ))}
                     </select>
                   </div>
                   <div className="field" style={{ gridColumn: 'span 2' }}>
@@ -453,23 +609,25 @@ const SectionMouvements = () => {
                     />
                   </div>
                 </div>
+                {submitError && <div className="submit-error">{submitError}</div>}
                 <button
                   type="submit"
                   className="btn-sm primary"
                   style={{ padding: '10px 24px', fontSize: '0.85rem' }}
+                  disabled={submitting}
                 >
-                  ✅ Enregistrer le mouvement
+                  {submitting ? 'Enregistrement...' : '✅ Enregistrer le mouvement'}
                 </button>
               </form>
             </div>
 
             {/* ─── Historique ─── */}
             <div className="card">
-              <h3>📋 Historique des mouvements</h3>
+              <h3>📋 Historique des mouvements ({filteredMouvements.length})</h3>
               <div className="filters">
                 <input
                   type="text"
-                  placeholder="🔍 Rechercher..."
+                  placeholder="🔍 Rechercher (n°, matériel, agent)..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
@@ -482,7 +640,7 @@ const SectionMouvements = () => {
                   <option value="EMPRUNT">EMPRUNT</option>
                   <option value="RETOUR">RETOUR</option>
                   <option value="TRANSFERT">TRANSFERT</option>
-                  <option value="RÉPARATION">RÉPARATION</option>
+                  <option value="REPARATION">RÉPARATION</option>
                   <option value="REBUT">REBUT</option>
                 </select>
                 <select
@@ -490,10 +648,9 @@ const SectionMouvements = () => {
                   onChange={(e) => setFilterBrigade(e.target.value)}
                 >
                   <option value="">Toutes les brigades</option>
-                  <option value="BOA">BOA</option>
-                  <option value="BR FI">BR FI</option>
-                  <option value="BR ADV">BR ADV</option>
-                  <option value="BR TLG">BR TLG</option>
+                  {brigades.map(b => (
+                    <option key={b.id} value={b.id}>{b.nom}</option>
+                  ))}
                 </select>
                 <input
                   type="date"
@@ -506,6 +663,13 @@ const SectionMouvements = () => {
                   onClick={handleFilter}
                 >
                   Filtrer
+                </button>
+                <button
+                  className="btn-sm outline"
+                  style={{ padding: '8px 20px' }}
+                  onClick={handleResetFilters}
+                >
+                  Réinitialiser
                 </button>
               </div>
               <div className="table-wrap">
@@ -522,50 +686,46 @@ const SectionMouvements = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    <tr>
-                      <td><strong>MVT-2026-0001</strong></td>
-                      <td>Pelle DS-12</td>
-                      <td><span className="type-badge emprunt">EMPRUNT</span></td>
-                      <td>Rakoto J.</td>
-                      <td>24/07/2026</td>
-                      <td><span className="badge yellow">En cours</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm outline" onClick={() => handleDetail('MVT-2026-0001')}>📄</button>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>MVT-2026-0002</strong></td>
-                      <td>Brouette 45L</td>
-                      <td><span className="type-badge retour">RETOUR</span></td>
-                      <td>Ranaivo M.</td>
-                      <td>23/07/2026</td>
-                      <td><span className="badge green">Retourné</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm outline" onClick={() => handleDetail('MVT-2026-0002')}>📄</button>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>MVT-2026-0003</strong></td>
-                      <td>Perceuse Bosh</td>
-                      <td><span className="type-badge reparation">RÉPARATION</span></td>
-                      <td>Andry R.</td>
-                      <td>22/07/2026</td>
-                      <td><span className="badge blue">En réparation</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm outline" onClick={() => handleDetail('MVT-2026-0003')}>📄</button>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>MVT-2026-0004</strong></td>
-                      <td>Échelle 6m</td>
-                      <td><span className="type-badge emprunt">EMPRUNT</span></td>
-                      <td>Rakotomalala</td>
-                      <td>20/07/2026</td>
-                      <td><span className="badge red">En retard</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm outline" onClick={() => handleDetail('MVT-2026-0004')}>📄</button>
-                      </td>
-                    </tr>
+                    {filteredMouvements.length === 0 ? (
+                      <tr>
+                        <td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
+                          Aucun mouvement trouvé
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredMouvements.map((m) => {
+                        const typeClass = {
+                          'APPROVISIONNEMENT': 'appro',
+                          'EMPRUNT': 'emprunt',
+                          'RETOUR': 'retour',
+                          'TRANSFERT': 'transfert',
+                          'REPARATION': 'reparation',
+                          'REBUT': 'rebut',
+                        }[m.type] || '';
+
+                        const statutClass = {
+                          'EN_COURS': 'yellow',
+                          'RETOURNE': 'green',
+                          'EN_RETARD': 'red',
+                          'PERDU': 'red',
+                          'ANNULE': 'gray',
+                        }[m.statut] || 'gray';
+
+                        return (
+                          <tr key={m.id}>
+                            <td><strong>{m.numero}</strong></td>
+                            <td>{m.materiel?.nom || 'N/A'}</td>
+                            <td><span className={`type-badge ${typeClass}`}>{m.type}</span></td>
+                            <td>{m.agent_concerner ? `${m.agent_concerner.nom} ${m.agent_concerner.prenom}` : '—'}</td>
+                            <td>{new Date(m.date_mouvement).toLocaleDateString('fr-FR')}</td>
+                            <td><span className={`badge ${statutClass}`}>{m.statut}</span></td>
+                            <td className="actions-cell">
+                              <button className="btn-sm outline" onClick={() => handleDetail(m.numero)}>📄 Détail</button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
                   </tbody>
                 </table>
               </div>

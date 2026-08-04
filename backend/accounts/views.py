@@ -1,18 +1,72 @@
 from django.shortcuts import render
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, serializers, permissions
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
 from django.contrib.auth import get_user_model
-from .serializers import UtilisateurSerializer
 from django.utils import timezone
-
-# Modèles nécessaires pour la validation hiérarchique
-from personnel.models import Section, Brigade  # <-- correction importante
+from .serializers import UtilisateurSerializer
+from personnel.models import Brigade
+from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 User = get_user_model()
 
+
+# ============================================================
+# 0. Permission custom : self, superuser, ou supérieur hiérarchique direct
+# ============================================================
+class IsSelfOrHierarchyOrAdmin(permissions.BasePermission):
+    """
+    Autorise l'action sur un compte utilisateur si :
+    - méthode sûre (GET/HEAD/OPTIONS), OU
+    - superuser Django (accès technique total, indépendant du rôle métier), OU
+    - l'utilisateur modifie son propre compte, OU
+    - l'utilisateur est le supérieur hiérarchique DIRECT de la cible
+      (Chef de Service → Chef de Section → Chef de Brigade → GL/CN)
+    """
+    def has_object_permission(self, request, view, obj):
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        user = request.user
+        if user.is_superuser:
+            return True
+        if obj.id == user.id:
+            return True
+        return view._user_can_validate(user, obj)
+
+
+# ============================================================
+# 1. Custom JWT Serializer pour bloquer EN_ATTENTE / REJETE
+# ============================================================
+class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    def validate(self, attrs):
+        # super().validate() effectue déjà l'authenticate() en interne
+        # et remplit self.user. Pas besoin (et surtout pas bon) de
+        # ré-authentifier nous-mêmes avant : ça double le coût du
+        # hachage du mot de passe (~1s x2) à chaque login.
+        data = super().validate(attrs)
+
+        if self.user.statut == 'EN_ATTENTE':
+            raise serializers.ValidationError(
+                "Votre compte est en attente de validation par votre supérieur. Veuillez patienter."
+            )
+        if self.user.statut == 'REJETE':
+            raise serializers.ValidationError(
+                "Votre compte a été rejeté. Contactez votre supérieur."
+            )
+
+        return data
+
+
+class CustomTokenObtainPairView(TokenObtainPairView):
+    serializer_class = CustomTokenObtainPairSerializer
+
+
+# ============================================================
+# 2. ViewSet Utilisateur
+# ============================================================
 class UtilisateurViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UtilisateurSerializer
@@ -23,7 +77,7 @@ class UtilisateurViewSet(viewsets.ModelViewSet):
         elif self.action in ['list', 'retrieve']:
             permission_classes = [IsAuthenticated]
         elif self.action in ['update', 'partial_update', 'destroy']:
-            permission_classes = [IsAdminUser]
+            permission_classes = [IsAuthenticated, IsSelfOrHierarchyOrAdmin]
         else:
             permission_classes = [IsAuthenticated]
         return [permission() for permission in permission_classes]
@@ -37,23 +91,41 @@ class UtilisateurViewSet(viewsets.ModelViewSet):
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
+    # ─── Brigade "effective" d'un chef, même si le FK inverse n'a pas été renseigné ───
+    def _get_user_brigade(self, user):
+        if user.brigade:
+            return user.brigade
+        return Brigade.objects.filter(chef_brigade=user).first()
+
+    # ─── Vérification des droits hiérarchiques (supérieur direct uniquement) ───
     def _user_can_validate(self, user, target_user):
-        if user.role == 'ADMIN':
+        if user.is_superuser:
             return True
+
+        # Chef de Service (ADMIN) → valide uniquement les Chefs de Section
+        if user.role == 'ADMIN':
+            return target_user.role == 'CHEF_SECTION'
+
+        # Chef de Section → valide uniquement les Chefs de Brigade de sa section
         if user.role == 'CHEF_SECTION':
+            if target_user.role != 'CHEF_BRIGADE':
+                return False
             if not user.section:
                 return False
-            if target_user.role in ['CHEF_BRIGADE', 'GL', 'CN']:
-                return target_user.section == user.section
-            return False
+            return target_user.section == user.section
+
+        # Chef de Brigade → valide uniquement les GL/CN de sa brigade
         if user.role == 'CHEF_BRIGADE':
-            if not user.brigade:
+            if target_user.role not in ['GL', 'CN']:
                 return False
-            if target_user.role in ['GL', 'CN']:
-                return target_user.brigade == user.brigade
-            return False
+            user_brigade = self._get_user_brigade(user)
+            if not user_brigade:
+                return False
+            return target_user.brigade == user_brigade
+
         return False
 
+    # ─── Valider un compte ───
     @action(detail=True, methods=['patch'])
     def valider(self, request, pk=None):
         user = request.user
@@ -67,6 +139,7 @@ class UtilisateurViewSet(viewsets.ModelViewSet):
         target.save()
         return Response({'status': 'utilisateur validé'})
 
+    # ─── Rejeter un compte ───
     @action(detail=True, methods=['patch'])
     def rejeter(self, request, pk=None):
         user = request.user
@@ -79,19 +152,30 @@ class UtilisateurViewSet(viewsets.ModelViewSet):
         target.save()
         return Response({'status': 'utilisateur rejeté'})
 
+    # ─── Changer le mot de passe ───
     @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
     def change_password(self, request):
         user = request.user
         old_password = request.data.get('old_password')
         new_password = request.data.get('new_password')
         if not old_password or not new_password:
-            return Response({'error': 'Veuillez fournir l\'ancien et le nouveau mot de passe'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {'error': 'Veuillez fournir l\'ancien et le nouveau mot de passe'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         if not user.check_password(old_password):
-            return Response({'error': 'Ancien mot de passe incorrect'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {'error': 'Ancien mot de passe incorrect'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         user.set_password(new_password)
         user.save()
         return Response({'status': 'Mot de passe mis à jour avec succès'})
 
+
+# ============================================================
+# 3. Vue "Me" pour récupérer l'utilisateur connecté
+# ============================================================
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
