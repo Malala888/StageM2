@@ -1,34 +1,113 @@
 import React, { useState } from 'react';
+import { useLoaderData, useRouteError } from 'react-router-dom';
 import GLSidebar from '../components/GLSidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
-const GLProfil = () => {
-  // ─── States pour les champs modifiables ───
-  const [email, setEmail] = useState('jean.rakoto@fce.mg');
-  const [telephone, setTelephone] = useState('+261 34 12 345 67');
-  const [adresse, setAdresse] = useState('Fianarantsoa, Madagascar');
+// ─── Cache mémoire ───
+let glProfilCache = null;
+let glProfilCacheTime = 0;
+const CACHE_TTL_MS = 15000;
 
-  // ─── Handlers ───
-  const handleSubmit = (e) => {
+async function fetchGLProfilData() {
+  const now = Date.now();
+  if (glProfilCache && now - glProfilCacheTime < CACHE_TTL_MS) {
+    return glProfilCache;
+  }
+
+  const [
+    { data: userData },
+    { data: brigadesData },
+    { data: sectionsData },
+  ] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/personnel/brigades/'),
+    api.get('/personnel/sections/'),
+  ]);
+
+  const brigade = brigadesData.find(b => b.id === userData.brigade) || null;
+  const section = sectionsData.find(s => s.id === brigade?.section) || null;
+  const user = { ...userData, brigade, section };
+
+  const result = { user };
+  glProfilCache = result;
+  glProfilCacheTime = now;
+  return result;
+}
+
+export async function glProfilLoader() {
+  return fetchGLProfilData();
+}
+
+export function GLProfilError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement du profil:', error);
+  return (
+    <div className="profil-body">
+      <div className="app">
+        <GLSidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh', flexDirection: 'column' }}>
+          <h2 style={{ color: 'red' }}>Erreur</h2>
+          <p>Impossible de charger votre profil. Veuillez réessayer.</p>
+          <button className="btn-sm primary" onClick={() => window.location.reload()}>Réessayer</button>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+const GLProfil = () => {
+  const { user: initialUser } = useLoaderData();
+
+  const [nom, setNom] = useState(initialUser?.nom || '');
+  const [prenom, setPrenom] = useState(initialUser?.prenom || '');
+  const [email, setEmail] = useState(initialUser?.email || '');
+  const [telephone, setTelephone] = useState('');
+  const [updateSuccess, setUpdateSuccess] = useState('');
+  const [updateError, setUpdateError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const brigadeName = initialUser?.brigade?.nom || 'N/A';
+  const sectionName = initialUser?.section?.nom || 'N/A';
+  const statut = initialUser?.statut || 'ACTIF';
+  const dateInscription = initialUser?.date_inscription
+    ? new Date(initialUser.date_inscription).toLocaleDateString('fr-FR')
+    : 'N/A';
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    alert('💾 Profil mis à jour avec succès !');
+    setUpdateError('');
+    setUpdateSuccess('');
+    setIsSubmitting(true);
+
+    try {
+      const payload = { nom, prenom, email };
+      await api.patch(`/accounts/users/${initialUser.id}/`, payload);
+      setUpdateSuccess('✅ Profil mis à jour avec succès !');
+      initialUser.nom = nom;
+      initialUser.prenom = prenom;
+      initialUser.email = email;
+    } catch (err) {
+      console.error(err);
+      const msg = err.response?.data?.detail || err.response?.data?.message || 'Erreur lors de la mise à jour du profil';
+      setUpdateError(`❌ ${msg}`);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
     <>
       <style>{`
-        /* ─── Reset complet ─── */
         * {
           margin: 0;
           padding: 0;
           box-sizing: border-box;
         }
-
         html, body {
           min-height: 100%;
           font-family: 'Inter', sans-serif;
         }
-
         #root {
           width: 100% !important;
           max-width: 100% !important;
@@ -38,7 +117,6 @@ const GLProfil = () => {
           border: none !important;
           padding: 0 !important;
         }
-
         @import url('https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap');
 
         .profil-body {
@@ -48,7 +126,6 @@ const GLProfil = () => {
           color: #0f172a;
           min-height: 100vh;
         }
-
         .profil-body::before {
           content: '';
           position: fixed;
@@ -58,21 +135,17 @@ const GLProfil = () => {
           -webkit-backdrop-filter: blur(2px);
           z-index: 0;
         }
-
         .app {
           position: relative;
           z-index: 1;
-          display: block;          /* plus de flex, sidebar fixed */
+          display: block;
           min-height: 100vh;
         }
-
-        /* ─── Le main est décalé pour la sidebar fixed ─── */
         .main {
-          margin-left: 240px;      /* largeur de la sidebar */
+          margin-left: 240px;
           padding: 28px 36px;
           min-height: 100vh;
         }
-
         .page-header {
           display: flex;
           justify-content: space-between;
@@ -199,8 +272,7 @@ const GLProfil = () => {
           letter-spacing: 0.05em;
           color: #475569;
         }
-        .form-grid .field input,
-        .form-grid .field textarea {
+        .form-grid .field input {
           padding: 10px 14px;
           border-radius: 10px;
           border: 1.5px solid #e2e8f0;
@@ -210,8 +282,7 @@ const GLProfil = () => {
           outline: none;
           transition: border-color 0.2s, box-shadow 0.2s;
         }
-        .form-grid .field input:focus,
-        .form-grid .field textarea:focus {
+        .form-grid .field input:focus {
           border-color: #2563eb;
           box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
         }
@@ -243,15 +314,28 @@ const GLProfil = () => {
           border-top: 1px solid #e2e8f0;
         }
 
-        /* ─── Responsive ─── */
+        .success-message {
+          color: #16a34a;
+          background: #dcfce7;
+          padding: 10px 14px;
+          border-radius: 8px;
+          margin-bottom: 12px;
+          font-size: 0.9rem;
+        }
+        .error-message {
+          color: #dc2626;
+          background: #fee2e2;
+          padding: 10px 14px;
+          border-radius: 8px;
+          margin-bottom: 12px;
+          font-size: 0.9rem;
+        }
+
         @media (max-width: 1024px) {
           .main { margin-left: 200px; padding: 20px 24px; }
         }
         @media (max-width: 768px) {
-          .main {
-            margin-left: 0;        /* la sidebar devient relative ou on garde fixed mais on réduit le padding */
-            padding: 16px;
-          }
+          .main { margin-left: 0; padding: 16px; }
           .page-header { flex-direction: column; align-items: flex-start; gap: 12px; }
           .form-grid { grid-template-columns: 1fr; }
           .form-grid .field.full { grid-column: span 1; }
@@ -261,74 +345,54 @@ const GLProfil = () => {
 
       <div className="profil-body">
         <div className="app">
-          {/* Sidebar fixed, importée depuis le composant séparé */}
           <GLSidebar />
-
           <main className="main">
             <div className="page-header">
               <div>
                 <h1>Mon Profil</h1>
-                <div className="sub">
-                  Informations personnelles — <span className="role-badge">GL</span>
-                </div>
+                <div className="sub">Informations personnelles — <span className="role-badge">GL</span></div>
               </div>
               <div className="user-badge">
-                <div className="avatar">GL</div>
+                <div className="avatar">{initialUser?.prenom?.[0] || 'G'}</div>
                 <div>
-                  <div className="name">Rakoto Jean</div>
-                  <div className="role">Garde Ligne • BR FI</div>
+                  <div className="name">{initialUser?.prenom || 'Garde'} {initialUser?.nom || 'Ligne'}</div>
+                  <div className="role">Garde Ligne • {brigadeName}</div>
                 </div>
               </div>
             </div>
 
             <div className="card">
               <div className="profile-header">
-                <div className="avatar-large">RJ</div>
+                <div className="avatar-large">{initialUser?.prenom?.[0] || 'G'}{initialUser?.nom?.[0] || 'L'}</div>
                 <div className="info">
-                  <h2>Rakoto Jean</h2>
-                  <p>Garde Ligne (GL) • Brigade BR FI • Section Fianarantsoa</p>
+                  <h2>{initialUser?.prenom || 'Garde'} {initialUser?.nom || 'Ligne'}</h2>
+                  <p>Garde Ligne (GL) • Brigade {brigadeName} • Section {sectionName}</p>
                   <p style={{ fontSize: '0.85rem', color: '#94a3b8' }}>
-                    Compte validé le 15/06/2026 • Actif
+                    Compte validé le {dateInscription} • {statut}
                   </p>
                 </div>
               </div>
+
+              {updateSuccess && <div className="success-message">{updateSuccess}</div>}
+              {updateError && <div className="error-message">{updateError}</div>}
 
               <form onSubmit={handleSubmit}>
                 <div className="form-grid">
                   <div className="field">
                     <label htmlFor="nom">Nom</label>
-                    <input type="text" id="nom" value="Rakoto" disabled />
+                    <input type="text" id="nom" value={nom} onChange={(e) => setNom(e.target.value)} required />
                   </div>
                   <div className="field">
                     <label htmlFor="prenom">Prénom</label>
-                    <input type="text" id="prenom" value="Jean" disabled />
+                    <input type="text" id="prenom" value={prenom} onChange={(e) => setPrenom(e.target.value)} required />
                   </div>
                   <div className="field">
                     <label htmlFor="email">Email</label>
-                    <input
-                      type="email"
-                      id="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                    />
+                    <input type="email" id="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
                   </div>
                   <div className="field">
                     <label htmlFor="telephone">Téléphone</label>
-                    <input
-                      type="text"
-                      id="telephone"
-                      value={telephone}
-                      onChange={(e) => setTelephone(e.target.value)}
-                    />
-                  </div>
-                  <div className="field full">
-                    <label htmlFor="adresse">Adresse (optionnel)</label>
-                    <input
-                      type="text"
-                      id="adresse"
-                      value={adresse}
-                      onChange={(e) => setAdresse(e.target.value)}
-                    />
+                    <input type="text" id="telephone" value={telephone} onChange={(e) => setTelephone(e.target.value)} placeholder="+261 XX XXX XX XX" />
                   </div>
                   <div className="field">
                     <label>Poste</label>
@@ -336,25 +400,25 @@ const GLProfil = () => {
                   </div>
                   <div className="field">
                     <label>Brigade</label>
-                    <input type="text" value="BR FI – Fianarantsoa" disabled />
+                    <input type="text" value={brigadeName} disabled />
+                  </div>
+                  <div className="field">
+                    <label>Section</label>
+                    <input type="text" value={sectionName} disabled />
                   </div>
                   <div className="field">
                     <label>Statut</label>
-                    <input
-                      type="text"
-                      value="ACTIF"
-                      style={{ color: '#16a34a', fontWeight: 600 }}
-                      disabled
-                    />
+                    <input type="text" value={statut} style={{ color: statut === 'ACTIF' ? '#16a34a' : '#dc2626', fontWeight: 600 }} disabled />
                   </div>
                   <div className="field">
                     <label>Date d'adhésion</label>
-                    <input type="text" value="15/06/2026" disabled />
+                    <input type="text" value={dateInscription} disabled />
                   </div>
                 </div>
+
                 <div className="form-actions">
-                  <button type="submit" className="btn-sm primary" style={{ padding: '10px 28px' }}>
-                    💾 Mettre à jour
+                  <button type="submit" className="btn-sm primary" style={{ padding: '10px 28px' }} disabled={isSubmitting}>
+                    {isSubmitting ? 'Enregistrement...' : '💾 Mettre à jour'}
                   </button>
                 </div>
               </form>

@@ -1,15 +1,117 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useLoaderData, useRouteError } from 'react-router-dom';
 import GLSidebar from '../components/GLSidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
+// ─── Cache mémoire ───
+let glMaterielsCache = null;
+let glMaterielsCacheTime = 0;
+const CACHE_TTL_MS = 15000;
+
+async function fetchGLMaterielsData() {
+  const now = Date.now();
+  if (glMaterielsCache && now - glMaterielsCacheTime < CACHE_TTL_MS) {
+    return glMaterielsCache;
+  }
+
+  const [
+    { data: userData },
+    { data: mouvementsData },
+    { data: materielsData },
+  ] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/materiaux/mouvements/'),
+    api.get('/materiaux/materiels/'),
+  ]);
+
+  // Filtrer les mouvements où l'utilisateur est agent_concerner et type EMPRUNT, statut EN_COURS
+  const mesEmprunts = mouvementsData.filter(
+    m => m.agent_concerner === userData.id && m.type === 'EMPRUNT' && m.statut === 'EN_COURS'
+  );
+
+  // Enrichir avec les détails du matériel
+  const materielsAssignes = mesEmprunts.map(m => {
+    const mat = materielsData.find(mat => mat.id === m.materiel);
+    return mat ? {
+      ...mat,
+      quantite: m.quantite,
+      mouvement_id: m.id,
+      date_emprunt: m.date_mouvement,
+      date_retour_prevue: m.date_retour_prevue,
+      statut_mouvement: m.statut,
+    } : null;
+  }).filter(Boolean);
+
+  const result = {
+    user: userData,
+    materiels: materielsAssignes,
+    mouvements: mesEmprunts,
+  };
+
+  glMaterielsCache = result;
+  glMaterielsCacheTime = now;
+  return result;
+}
+
+// ─── Loader ───
+export async function glMaterielsLoader() {
+  return fetchGLMaterielsData();
+}
+
+// ─── ErrorElement ───
+export function GLMaterielsError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement des matériels GL:', error);
+  return (
+    <div className="materiels-body">
+      <div className="app">
+        <GLSidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh', flexDirection: 'column' }}>
+          <h2 style={{ color: 'red' }}>Erreur</h2>
+          <p>Impossible de charger vos matériels. Veuillez réessayer.</p>
+          <button className="btn-sm primary" onClick={() => window.location.reload()}>Réessayer</button>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── Composant principal ───
 const GLMateriels = () => {
+  const { user, materiels: initialMateriels, mouvements } = useLoaderData();
+
+  const [materiels, setMateriels] = useState(initialMateriels);
   const [searchTerm, setSearchTerm] = useState('');
   const [categorie, setCategorie] = useState('');
   const [etat, setEtat] = useState('');
+  const [filteredMateriels, setFilteredMateriels] = useState(initialMateriels);
 
+  // Appliquer les filtres
+  useEffect(() => {
+    let result = materiels;
+
+    if (searchTerm.trim()) {
+      result = result.filter(m =>
+        m.nom.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        m.categorie.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+
+    if (categorie) {
+      result = result.filter(m => m.categorie === categorie);
+    }
+
+    if (etat) {
+      result = result.filter(m => m.etat === etat);
+    }
+
+    setFilteredMateriels(result);
+  }, [searchTerm, categorie, etat, materiels]);
+
+  // ─── Handlers ───
   const handleFilter = (e) => {
     e.preventDefault();
-    alert('Filtres appliqués !');
   };
 
   const handleReset = () => {
@@ -18,9 +120,47 @@ const GLMateriels = () => {
     setEtat('');
   };
 
-  const handleDemander = (materiel) => {
-    alert(`📤 Demande d'emprunt : ${materiel}`);
+  const handleDemander = async (materielId, nom) => {
+    // Ouvrir un prompt pour la quantité (par défaut 1)
+    const quantite = parseInt(prompt(`Quantité à emprunter pour "${nom}" :`, '1'));
+    if (!quantite || quantite <= 0) return;
+
+    // Demander une date de retour prévue (optionnelle)
+    const dateRetour = prompt('Date de retour prévue (YYYY-MM-DD) :', new Date(Date.now() + 7*24*60*60*1000).toISOString().split('T')[0]);
+    if (!dateRetour) return;
+
+    try {
+      // Créer un mouvement EMPRUNT
+      await api.post('/materiaux/mouvements/', {
+        type: 'EMPRUNT',
+        materiel: materielId,
+        quantite: quantite,
+        date_mouvement: new Date().toISOString().split('T')[0],
+        date_retour_prevue: dateRetour,
+        agent_concerner: user.id,
+        brigade: user.brigade,
+        commentaire: `Demande d'emprunt par ${user.nom} ${user.prenom}`,
+      });
+      alert(`✅ Demande d'emprunt pour "${nom}" envoyée avec succès !`);
+      // Recharger la liste des matériels
+      const { data: newMouvements } = await api.get('/materiaux/mouvements/');
+      const mesEmprunts = newMouvements.filter(
+        m => m.agent_concerner === user.id && m.type === 'EMPRUNT' && m.statut === 'EN_COURS'
+      );
+      const { data: newMateriels } = await api.get('/materiaux/materiels/');
+      const nouveauxMateriels = mesEmprunts.map(m => {
+        const mat = newMateriels.find(mat => mat.id === m.materiel);
+        return mat ? { ...mat, quantite: m.quantite, mouvement_id: m.id } : null;
+      }).filter(Boolean);
+      setMateriels(nouveauxMateriels);
+      setFilteredMateriels(nouveauxMateriels);
+    } catch (err) {
+      console.error(err);
+      alert('❌ Erreur lors de la demande d\'emprunt.');
+    }
   };
+
+  const brigadeName = user?.brigade?.nom || 'N/A';
 
   return (
     <>
@@ -70,13 +210,12 @@ const GLMateriels = () => {
         .app {
           position: relative;
           z-index: 1;
-          display: block;          /* plus de flex, sidebar fixed */
+          display: block;
           min-height: 100vh;
         }
 
-        /* ─── Le main est décalé pour la sidebar fixed ─── */
         .main {
-          margin-left: 240px;      /* largeur de la sidebar */
+          margin-left: 240px;
           padding: 28px 36px;
           min-height: 100vh;
         }
@@ -243,22 +382,17 @@ const GLMateriels = () => {
           flex-wrap: wrap;
         }
 
-        /* ─── Responsive ─── */
         @media (max-width: 1024px) {
           .main { margin-left: 200px; padding: 20px 24px; }
         }
         @media (max-width: 768px) {
-          .main {
-            margin-left: 0;        /* la sidebar devient relative ou on garde fixed mais on réduit le padding */
-            padding: 16px;
-          }
+          .main { margin-left: 0; padding: 16px; }
           .page-header { flex-direction: column; align-items: flex-start; gap: 12px; }
         }
       `}</style>
 
       <div className="materiels-body">
         <div className="app">
-          {/* Sidebar fixed, importée depuis le composant séparé */}
           <GLSidebar />
 
           <main className="main">
@@ -270,10 +404,10 @@ const GLMateriels = () => {
                 </div>
               </div>
               <div className="user-badge">
-                <div className="avatar">GL</div>
+                <div className="avatar">{user?.prenom ? user.prenom[0] : 'GL'}</div>
                 <div>
-                  <div className="name">Rakoto Jean</div>
-                  <div className="role">Garde Ligne • BR FI</div>
+                  <div className="name">{user?.prenom || 'Garde'} {user?.nom || 'Ligne'}</div>
+                  <div className="role">Garde Ligne • {brigadeName}</div>
                 </div>
               </div>
             </div>
@@ -324,54 +458,38 @@ const GLMateriels = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    <tr>
-                      <td><strong>Pelle DS-12</strong></td>
-                      <td>Outillage</td>
-                      <td>1</td>
-                      <td><span className="badge green">BON</span></td>
-                      <td><span className="stock-badge high">✅ Disponible</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm primary" onClick={() => handleDemander('Pelle DS-12')}>
-                          Demander
-                        </button>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>Brouette 45L</strong></td>
-                      <td>BTP</td>
-                      <td>2</td>
-                      <td><span className="badge yellow">MOYEN</span></td>
-                      <td><span className="stock-badge high">✅ Disponible</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm primary" onClick={() => handleDemander('Brouette 45L')}>
-                          Demander
-                        </button>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>Échelle 6m</strong></td>
-                      <td>BTP</td>
-                      <td>1</td>
-                      <td><span className="badge green">NEUF</span></td>
-                      <td><span className="stock-badge medium">🔴 Déjà emprunté</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm outline" disabled style={{ opacity: 0.5 }}>
-                          Indisponible
-                        </button>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>Perceuse Bosh</strong></td>
-                      <td>Électrique</td>
-                      <td>1</td>
-                      <td><span className="badge green">BON</span></td>
-                      <td><span className="stock-badge high">✅ Disponible</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm primary" onClick={() => handleDemander('Perceuse Bosh')}>
-                          Demander
-                        </button>
-                      </td>
-                    </tr>
+                    {filteredMateriels.length === 0 ? (
+                      <tr>
+                        <td colSpan="6" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
+                          Aucun matériel assigné
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredMateriels.map((m) => {
+                        // Si le matériel est déjà emprunté par l'utilisateur, on le considère comme "Déjà emprunté"
+                        const isDejaEmprunte = true; // Tous les matériels affichés sont déjà en cours d'emprunt
+                        return (
+                          <tr key={m.id}>
+                            <td><strong>{m.nom}</strong></td>
+                            <td>{m.categorie}</td>
+                            <td>{m.quantite}</td>
+                            <td>
+                              <span className={`badge ${m.etat === 'NEUF' ? 'green' : m.etat === 'BON' ? 'green' : m.etat === 'MOYEN' ? 'yellow' : m.etat === 'MAUVAIS' ? 'red' : 'red'}`}>
+                                {m.etat}
+                              </span>
+                            </td>
+                            <td>
+                              <span className="stock-badge medium">🔴 Déjà emprunté</span>
+                            </td>
+                            <td className="actions-cell">
+                              <button className="btn-sm outline" disabled style={{ opacity: 0.5 }}>
+                                Indisponible
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -379,7 +497,7 @@ const GLMateriels = () => {
 
             {/* Note */}
             <div style={{ fontSize: '0.8rem', color: '#94a3b8', background: '#f1f5f9', padding: '12px 16px', borderRadius: '10px' }}>
-              💡 Pour emprunter un matériel, cliquez sur "Demander". Votre chef de brigade validera la demande.
+              💡 Pour emprunter un matériel supplémentaire, vous pouvez faire une demande via le bouton "Demander" sur la page d'accueil ou via la page des mouvements.
             </div>
           </main>
         </div>

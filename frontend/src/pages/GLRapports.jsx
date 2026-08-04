@@ -1,23 +1,141 @@
 import React, { useState } from 'react';
+import { useLoaderData, useRouteError } from 'react-router-dom';
 import GLSidebar from '../components/GLSidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
+// ─── Cache mémoire ───
+let glRapportsCache = null;
+let glRapportsCacheTime = 0;
+const CACHE_TTL_MS = 15000;
+
+async function fetchGLRapportsData() {
+  const now = Date.now();
+  if (glRapportsCache && now - glRapportsCacheTime < CACHE_TTL_MS) {
+    return glRapportsCache;
+  }
+
+  const [
+    { data: userData },
+    { data: mouvementsData },
+    { data: materielsData },
+    { data: brigadesData },
+    { data: sectionsData },
+  ] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/materiaux/mouvements/'),
+    api.get('/materiaux/materiels/'),
+    api.get('/personnel/brigades/'),
+    api.get('/personnel/sections/'),
+  ]);
+
+  // Enrichir l'utilisateur avec la brigade et la section
+  const brigade = brigadesData.find(b => b.id === userData.brigade) || null;
+  const section = sectionsData.find(s => s.id === brigade?.section) || null;
+  const user = { ...userData, brigade, section };
+
+  // Filtrer les mouvements où l'utilisateur est agent_concerner
+  const mesMouvements = mouvementsData.filter(m => m.agent_concerner === userData.id);
+
+  // --- Statistiques ---
+  const totalEmprunts = mesMouvements.filter(m => m.type === 'EMPRUNT').length;
+  const totalRetours = mesMouvements.filter(m => m.type === 'RETOUR').length;
+  const empruntsEnCours = mesMouvements.filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS').length;
+  const retards = mesMouvements.filter(m => m.statut === 'EN_RETARD').length;
+  const demandesEnAttente = mesMouvements.filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_ATTENTE').length;
+
+  // Taux de retour (pour les emprunts qui ont un retour effectif)
+  const empruntsAvecRetour = mesMouvements.filter(m => m.type === 'EMPRUNT' && m.date_retour_effective !== null);
+  const tauxRetour = totalEmprunts > 0 ? Math.round((empruntsAvecRetour.length / totalEmprunts) * 100) : 0;
+
+  // Matériels actuellement assignés (en cours d'emprunt)
+  const assignes = mesMouvements
+    .filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS')
+    .map(m => {
+      const mat = materielsData.find(mat => mat.id === m.materiel);
+      return mat ? mat.nom : null;
+    })
+    .filter(Boolean);
+
+  // Nombre de matériels assignés (quantité totale)
+  const nbMaterielsAssignes = mesMouvements
+    .filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS')
+    .reduce((acc, m) => acc + m.quantite, 0);
+
+  const result = {
+    user,
+    totalEmprunts,
+    totalRetours,
+    empruntsEnCours,
+    retards,
+    demandesEnAttente,
+    tauxRetour,
+    nbMaterielsAssignes,
+    assignes,
+    section: section,
+    brigade: brigade,
+  };
+
+  glRapportsCache = result;
+  glRapportsCacheTime = now;
+  return result;
+}
+
+// ─── Loader ───
+export async function glRapportsLoader() {
+  return fetchGLRapportsData();
+}
+
+// ─── ErrorElement ───
+export function GLRapportsError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement des rapports GL:', error);
+  return (
+    <div className="rapports-body">
+      <div className="app">
+        <GLSidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh', flexDirection: 'column' }}>
+          <h2 style={{ color: 'red' }}>Erreur</h2>
+          <p>Impossible de charger vos statistiques. Veuillez réessayer.</p>
+          <button className="btn-sm primary" onClick={() => window.location.reload()}>Réessayer</button>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── Composant principal ───
 const GLRapports = () => {
-  // ─── States pour les filtres ───
+  const {
+    user,
+    totalEmprunts,
+    totalRetours,
+    empruntsEnCours,
+    retards,
+    demandesEnAttente,
+    tauxRetour,
+    nbMaterielsAssignes,
+    assignes,
+    brigade,
+    section,
+  } = useLoaderData();
+
   const [periode, setPeriode] = useState('');
 
-  // ─── Handlers ───
   const handleGenerer = () => {
-    alert(`📊 Rapport généré !\nPériode: ${periode || 'Toutes'}`);
+    alert(`📊 Rapport généré !\nPériode: ${periode || 'Toutes'}\nBasé sur vos données personnelles.`);
   };
 
   const handleExportPDF = () => {
     alert('📥 Export PDF en cours...');
   };
 
-  const handleCardClick = (titre) => {
-    alert(`📄 Voir les détails : ${titre}`);
+  const handleCardClick = (titre, detail) => {
+    alert(`📄 ${titre}\n${detail || ''}`);
   };
+
+  const brigadeName = brigade?.nom || 'N/A';
+  const sectionName = section?.nom || 'N/A';
 
   return (
     <>
@@ -67,13 +185,12 @@ const GLRapports = () => {
         .app {
           position: relative;
           z-index: 1;
-          display: block;          /* plus de flex, sidebar fixed */
+          display: block;
           min-height: 100vh;
         }
 
-        /* ─── Le main est décalé pour la sidebar fixed ─── */
         .main {
-          margin-left: 240px;      /* largeur de la sidebar */
+          margin-left: 240px;
           padding: 28px 36px;
           min-height: 100vh;
         }
@@ -222,15 +339,11 @@ const GLRapports = () => {
         .btn-sm.success { background: #16a34a; color: #fff; }
         .btn-sm.success:hover { background: #15803d; }
 
-        /* ─── Responsive ─── */
         @media (max-width: 1024px) {
           .main { margin-left: 200px; padding: 20px 24px; }
         }
         @media (max-width: 768px) {
-          .main {
-            margin-left: 0;        /* la sidebar devient relative ou on garde fixed mais on réduit le padding */
-            padding: 16px;
-          }
+          .main { margin-left: 0; padding: 16px; }
           .page-header { flex-direction: column; align-items: flex-start; gap: 12px; }
           .report-grid { grid-template-columns: 1fr 1fr; }
         }
@@ -241,7 +354,6 @@ const GLRapports = () => {
 
       <div className="rapports-body">
         <div className="app">
-          {/* Sidebar fixed, importée depuis le composant séparé */}
           <GLSidebar />
 
           <main className="main">
@@ -253,10 +365,10 @@ const GLRapports = () => {
                 </div>
               </div>
               <div className="user-badge">
-                <div className="avatar">GL</div>
+                <div className="avatar">{user?.prenom?.[0] || 'G'}</div>
                 <div>
-                  <div className="name">Rakoto Jean</div>
-                  <div className="role">Garde Ligne • BR FI</div>
+                  <div className="name">{user?.prenom || 'Garde'} {user?.nom || 'Ligne'}</div>
+                  <div className="role">Garde Ligne • {brigadeName}</div>
                 </div>
               </div>
             </div>
@@ -283,43 +395,71 @@ const GLRapports = () => {
 
             {/* ─── Cartes de rapports ─── */}
             <div className="report-grid">
-              <div className="report-card" onClick={() => handleCardClick('Emprunts effectués')}>
+              <div className="report-card" onClick={() => handleCardClick('Emprunts effectués', `${totalEmprunts} emprunts au total`)}>
                 <div className="icon">📊</div>
                 <div className="title">Emprunts effectués</div>
-                <div className="desc">12 emprunts au total</div>
-                <span className="badge blue">+3 ce mois</span>
+                <div className="desc">{totalEmprunts} emprunts au total</div>
+                <span className="badge blue">+{empruntsEnCours} en cours</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Retards')}>
+
+              <div className="report-card" onClick={() => handleCardClick('Retards', `${retards} retard(s) signalé(s)`)}>
                 <div className="icon">⏰</div>
                 <div className="title">Retards</div>
-                <div className="desc">0 retard</div>
-                <span className="badge green">✅ Parfait</span>
+                <div className="desc">{retards} retard{retards > 1 ? 's' : ''}</div>
+                <span className={`badge ${retards === 0 ? 'green' : 'red'}`}>
+                  {retards === 0 ? '✅ Parfait' : `${retards} à traiter`}
+                </span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Matériels assignés')}>
+
+              <div className="report-card" onClick={() => handleCardClick('Matériels assignés', `${nbMaterielsAssignes} matériels en votre possession`)}>
                 <div className="icon">🔧</div>
                 <div className="title">Matériels assignés</div>
-                <div className="desc">8 matériels en votre possession</div>
+                <div className="desc">{nbMaterielsAssignes} matériel{nbMaterielsAssignes > 1 ? 's' : ''} en votre possession</div>
                 <span className="badge blue">Voir détails</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Taux de retour')}>
+
+              <div className="report-card" onClick={() => handleCardClick('Taux de retour', `${tauxRetour}% de retours à temps`)}>
                 <div className="icon">🔄</div>
                 <div className="title">Taux de retour</div>
-                <div className="desc">92% de retours à temps</div>
-                <span className="badge green">✅ Bon</span>
+                <div className="desc">{tauxRetour}% de retours effectués</div>
+                <span className={`badge ${tauxRetour >= 80 ? 'green' : 'orange'}`}>
+                  {tauxRetour >= 80 ? '✅ Bon' : 'Améliorable'}
+                </span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Demandes en attente')}>
+
+              <div className="report-card" onClick={() => handleCardClick('Demandes en attente', `${demandesEnAttente} demande(s) en attente`)}>
                 <div className="icon">📦</div>
                 <div className="title">Demandes en attente</div>
-                <div className="desc">2 demandes en cours</div>
-                <span className="badge yellow">En attente</span>
+                <div className="desc">{demandesEnAttente} demande{demandesEnAttente > 1 ? 's' : ''} en attente</div>
+                <span className={`badge ${demandesEnAttente === 0 ? 'green' : 'yellow'}`}>
+                  {demandesEnAttente === 0 ? '✅ Aucune' : 'En attente'}
+                </span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Brigade')}>
+
+              <div className="report-card" onClick={() => handleCardClick('Brigade', `${brigadeName} – Section ${sectionName}`)}>
                 <div className="icon">🏢</div>
                 <div className="title">Brigade</div>
-                <div className="desc">BR FI – Fianarantsoa</div>
-                <span className="badge blue">Section Fianarantsoa</span>
+                <div className="desc">{brigadeName}</div>
+                <span className="badge blue">Section {sectionName}</span>
               </div>
             </div>
+
+            {/* ─── Détail des matériels assignés ─── */}
+            {assignes.length > 0 && (
+              <div className="card">
+                <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '14px' }}>
+                  📋 Matériels actuellement assignés ({assignes.length})
+                </h3>
+                <ul style={{ listStyle: 'none', padding: 0 }}>
+                  {assignes.map((nom, index) => (
+                    <li key={index} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f1f5f9' }}>
+                      <span><strong>{index+1}.</strong> {nom}</span>
+                      <span className="badge blue">En cours</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </main>
         </div>
       </div>

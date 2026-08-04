@@ -27,12 +27,12 @@ import BrigadeUsers, { brigadeUsersLoader, BrigadeUsersError } from './pages/Bri
 import BrigadeRapports, { brigadeRapportsLoader, BrigadeRapportsError } from './pages/BrigadeRapports';
 import BrigadeParametres, { brigadeParametresLoader, BrigadeParametresError } from './pages/BrigadeParametres';
 // Garde Ligne
-import GLDashboard from './pages/GLDashboard';
-import GLMateriels from './pages/GLMateriels';
-import GLMouvements from './pages/GLMouvements';
-import GLProfil from './pages/GLProfil';
-import GLRapports from './pages/GLRapports';
-import GLParametres from './pages/GLParametres';
+import GLDashboard, { glDashboardLoader, GLDashboardError } from './pages/GLDashboard';
+import GLMateriels, { glMaterielsLoader, GLMaterielsError } from './pages/GLMateriels';
+import GLMouvements, { glMouvementsLoader, GLMouvementsError } from './pages/GLMouvements';
+import GLProfil, { glProfilLoader, GLProfilError } from './pages/GLProfil';
+import GLRapports, { glRapportsLoader, GLRapportsError } from './pages/GLRapports';
+import GLParametres, { glParametresLoader, GLParametresError } from './pages/GLParametres';
 // Cantonnier
 import CNDashboard from './pages/CNDashboard';
 import CNMateriels from './pages/CNMateriels';
@@ -219,12 +219,42 @@ const router = createBrowserRouter([
       },
 
       // Garde Ligne
-      { path: '/gl/dashboard', element: <GLDashboard /> },
-      { path: '/gl/materiels', element: <GLMateriels /> },
-      { path: '/gl/mouvements', element: <GLMouvements /> },
-      { path: '/gl/profile', element: <GLProfil /> },
-      { path: '/gl/rapports', element: <GLRapports /> },
-      { path: '/gl/parametres', element: <GLParametres /> },
+      {
+        path: '/gl/dashboard',
+        element: <GLDashboard />,
+        loader: glDashboardLoader,
+        errorElement: <GLDashboardError />,
+      },
+      {
+        path: '/gl/materiels',
+        element: <GLMateriels />,
+        loader: glMaterielsLoader,
+        errorElement: <GLMaterielsError />,
+      },
+      {
+        path: '/gl/mouvements',
+        element: <GLMouvements />,
+        loader: glMouvementsLoader,
+        errorElement: <GLMouvementsError />,
+      },
+      {
+        path: '/gl/profile',
+        element: <GLProfil />,
+        loader: glProfilLoader,
+        errorElement: <GLProfilError />,
+      },
+      {
+        path: '/gl/rapports',
+        element: <GLRapports />,
+        loader: glRapportsLoader,
+        errorElement: <GLRapportsError />,
+      },
+      {
+        path: '/gl/parametres',
+        element: <GLParametres />,
+        loader: glParametresLoader,
+        errorElement: <GLParametresError />,
+      },
 
       // Cantonnier
       { path: '/cn/dashboard', element: <CNDashboard /> },
