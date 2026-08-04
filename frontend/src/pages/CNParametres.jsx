@@ -1,26 +1,107 @@
 import React, { useState } from 'react';
+import { useLoaderData, useRouteError } from 'react-router-dom';
 import CNSidebar from '../components/CNSidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
+// ─── Cache mémoire ───
+let cnParametresCache = null;
+let cnParametresCacheTime = 0;
+const CACHE_TTL_MS = 15000;
+
+async function fetchCNParametresData() {
+  const now = Date.now();
+  if (cnParametresCache && now - cnParametresCacheTime < CACHE_TTL_MS) {
+    return cnParametresCache;
+  }
+
+  const [
+    { data: userData },
+    { data: brigadesData },
+  ] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/personnel/brigades/'),
+  ]);
+
+  // Enrichir l'utilisateur avec l'objet brigade
+  const brigade = brigadesData.find(b => b.id === userData.brigade) || null;
+  const user = { ...userData, brigade };
+
+  const result = { user };
+  cnParametresCache = result;
+  cnParametresCacheTime = now;
+  return result;
+}
+
+export async function cnParametresLoader() {
+  return fetchCNParametresData();
+}
+
+export function CNParametresError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement des paramètres:', error);
+  return (
+    <div className="parametres-body">
+      <div className="app">
+        <CNSidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh', flexDirection: 'column' }}>
+          <h2 style={{ color: 'red' }}>Erreur</h2>
+          <p>Impossible de charger les paramètres. Veuillez réessayer.</p>
+          <button className="btn-sm primary" onClick={() => window.location.reload()}>Réessayer</button>
+        </main>
+      </div>
+    </div>
+  );
+}
+
 const CNParametres = () => {
-  // ─── States ───
-  const [email, setEmail] = useState('marie.ranaivo@fce.mg');
-  const [telephone, setTelephone] = useState('+261 32 45 678 90');
+  const { user: initialUser } = useLoaderData();
+
+  // ─── États pour le changement de mot de passe ───
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [updateSuccess, setUpdateSuccess] = useState('');
+  const [updateError, setUpdateError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const brigadeName = initialUser?.brigade?.nom || 'N/A';
 
   // ─── Handlers ───
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (newPassword && newPassword !== confirmPassword) {
-      alert('⚠️ Les mots de passe ne correspondent pas !');
+    setUpdateError('');
+    setUpdateSuccess('');
+    setIsSubmitting(true);
+
+    if (newPassword !== confirmPassword) {
+      setUpdateError('Les mots de passe ne correspondent pas');
+      setIsSubmitting(false);
       return;
     }
-    alert('💾 Paramètres mis à jour avec succès !');
-    setCurrentPassword('');
-    setNewPassword('');
-    setConfirmPassword('');
+
+    if (newPassword && newPassword.length < 8) {
+      setUpdateError('Le nouveau mot de passe doit contenir au moins 8 caractères');
+      setIsSubmitting(false);
+      return;
+    }
+
+    try {
+      await api.post('/accounts/change-password/', {
+        old_password: currentPassword,
+        new_password: newPassword,
+      });
+      setUpdateSuccess('✅ Mot de passe mis à jour avec succès !');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err) {
+      console.error(err);
+      const msg = err.response?.data?.detail || 'Erreur lors du changement de mot de passe';
+      setUpdateError(`❌ ${msg}`);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -71,13 +152,12 @@ const CNParametres = () => {
         .app {
           position: relative;
           z-index: 1;
-          display: block;          /* plus de flex, sidebar fixed */
+          display: block;
           min-height: 100vh;
         }
 
-        /* ─── Le main est décalé pour la sidebar fixed ─── */
         .main {
-          margin-left: 240px;      /* largeur de la sidebar */
+          margin-left: 240px;
           padding: 28px 36px;
           min-height: 100vh;
         }
@@ -178,8 +258,7 @@ const CNParametres = () => {
           letter-spacing: 0.05em;
           color: #475569;
         }
-        .form-grid .field input,
-        .form-grid .field textarea {
+        .form-grid .field input {
           padding: 10px 14px;
           border-radius: 10px;
           border: 1.5px solid #e2e8f0;
@@ -189,8 +268,7 @@ const CNParametres = () => {
           outline: none;
           transition: border-color 0.2s, box-shadow 0.2s;
         }
-        .form-grid .field input:focus,
-        .form-grid .field textarea:focus {
+        .form-grid .field input:focus {
           border-color: #2563eb;
           box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
         }
@@ -198,6 +276,11 @@ const CNParametres = () => {
           background: #f1f5f9;
           color: #64748b;
           cursor: not-allowed;
+        }
+        .form-grid .field .help {
+          font-size: 0.7rem;
+          color: #94a3b8;
+          margin-top: 2px;
         }
 
         .btn-sm {
@@ -211,8 +294,6 @@ const CNParametres = () => {
         }
         .btn-sm.primary { background: #2563eb; color: #fff; }
         .btn-sm.primary:hover { background: #1d4ed8; }
-        .btn-sm.success { background: #16a34a; color: #fff; }
-        .btn-sm.success:hover { background: #15803d; }
 
         .form-actions {
           display: flex;
@@ -222,64 +303,36 @@ const CNParametres = () => {
           border-top: 1px solid #e2e8f0;
         }
 
-        .info-grid {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 16px;
-        }
-        .info-grid .info-item label {
-          font-size: 0.75rem;
-          font-weight: 600;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-          color: #475569;
-          display: block;
-          margin-bottom: 4px;
-        }
-        .info-grid .info-item input {
-          width: 100%;
-          padding: 10px 14px;
-          border-radius: 10px;
-          border: 1.5px solid #e2e8f0;
-          background: #f1f5f9;
-          color: #64748b;
-          font-family: 'Inter', sans-serif;
-          font-size: 0.9rem;
-          cursor: not-allowed;
-        }
-        .info-grid .info-item input.status {
+        .success-message {
           color: #16a34a;
-          font-weight: 600;
-        }
-
-        .info-note {
-          margin-top: 14px;
-          font-size: 0.75rem;
-          color: #94a3b8;
-          background: #f1f5f9;
+          background: #dcfce7;
           padding: 10px 14px;
           border-radius: 8px;
+          margin-bottom: 12px;
+          font-size: 0.9rem;
+        }
+        .error-message {
+          color: #dc2626;
+          background: #fee2e2;
+          padding: 10px 14px;
+          border-radius: 8px;
+          margin-bottom: 12px;
+          font-size: 0.9rem;
         }
 
-        /* ─── Responsive ─── */
         @media (max-width: 1024px) {
           .main { margin-left: 200px; padding: 20px 24px; }
         }
         @media (max-width: 768px) {
-          .main {
-            margin-left: 0;        /* la sidebar devient relative ou on garde fixed mais on réduit le padding */
-            padding: 16px;
-          }
+          .main { margin-left: 0; padding: 16px; }
           .page-header { flex-direction: column; align-items: flex-start; gap: 12px; }
           .form-grid { grid-template-columns: 1fr; }
           .form-grid .field.full { grid-column: span 1; }
-          .info-grid { grid-template-columns: 1fr; }
         }
       `}</style>
 
       <div className="parametres-body">
         <div className="app">
-          {/* Sidebar fixed, importée depuis le composant séparé */}
           <CNSidebar />
 
           <main className="main">
@@ -287,104 +340,70 @@ const CNParametres = () => {
               <div>
                 <h1>Paramètres</h1>
                 <div className="sub">
-                  Configuration de votre compte — <span className="role-badge">CN</span>
+                  Gestion du compte — <span className="role-badge">CN</span>
                 </div>
               </div>
               <div className="user-badge">
-                <div className="avatar">CN</div>
+                <div className="avatar">{initialUser?.prenom?.[0] || 'C'}</div>
                 <div>
-                  <div className="name">Ranaivo Marie</div>
-                  <div className="role">Cantonnier • BR FI</div>
+                  <div className="name">{initialUser?.prenom || 'Cantonnier'} {initialUser?.nom || ''}</div>
+                  <div className="role">Cantonnier • {brigadeName}</div>
                 </div>
               </div>
             </div>
 
-            {/* ─── Sécurité ─── */}
+            {/* ─── Sécurité : Changement de mot de passe ─── */}
             <div className="card">
-              <h3>🔐 Sécurité</h3>
+              <h3>🔐 Changer le mot de passe</h3>
+
+              {updateSuccess && <div className="success-message">{updateSuccess}</div>}
+              {updateError && <div className="error-message">{updateError}</div>}
+
               <form onSubmit={handleSubmit}>
                 <div className="form-grid">
-                  <div className="field">
-                    <label htmlFor="email">Email</label>
-                    <input
-                      type="email"
-                      id="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                    />
-                  </div>
-                  <div className="field">
-                    <label htmlFor="telephone">Téléphone</label>
-                    <input
-                      type="text"
-                      id="telephone"
-                      value={telephone}
-                      onChange={(e) => setTelephone(e.target.value)}
-                    />
-                  </div>
                   <div className="field full">
-                    <label htmlFor="motdepasse_actuel">Mot de passe actuel</label>
+                    <label htmlFor="current_password">Mot de passe actuel</label>
                     <input
                       type="password"
-                      id="motdepasse_actuel"
+                      id="current_password"
                       placeholder="••••••••"
                       value={currentPassword}
                       onChange={(e) => setCurrentPassword(e.target.value)}
+                      required
                     />
                   </div>
-                  <div className="field">
-                    <label htmlFor="nouveau_mdp">Nouveau mot de passe</label>
+                  <div className="field full">
+                    <label htmlFor="new_password">Nouveau mot de passe</label>
                     <input
                       type="password"
-                      id="nouveau_mdp"
+                      id="new_password"
                       placeholder="••••••••"
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
+                      required
+                      minLength="8"
                     />
+                    <span className="help">Minimum 8 caractères.</span>
                   </div>
-                  <div className="field">
-                    <label htmlFor="confirmer_mdp">Confirmer le mot de passe</label>
+                  <div className="field full">
+                    <label htmlFor="confirm_password">Confirmer le nouveau mot de passe</label>
                     <input
                       type="password"
-                      id="confirmer_mdp"
+                      id="confirm_password"
                       placeholder="••••••••"
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
+                      required
                     />
                   </div>
                 </div>
+
                 <div className="form-actions">
-                  <button type="submit" className="btn-sm primary" style={{ padding: '10px 28px' }}>
-                    💾 Mettre à jour
+                  <button type="submit" className="btn-sm primary" style={{ padding: '10px 28px' }} disabled={isSubmitting}>
+                    {isSubmitting ? 'Enregistrement...' : '💾 Changer le mot de passe'}
                   </button>
                 </div>
               </form>
-            </div>
-
-            {/* ─── Informations ─── */}
-            <div className="card">
-              <h3>📱 Informations</h3>
-              <div className="info-grid">
-                <div className="info-item">
-                  <label>Poste</label>
-                  <input type="text" value="Cantonnier (CN)" disabled />
-                </div>
-                <div className="info-item">
-                  <label>Brigade</label>
-                  <input type="text" value="BR FI – Fianarantsoa" disabled />
-                </div>
-                <div className="info-item">
-                  <label>Statut</label>
-                  <input type="text" value="ACTIF" className="status" disabled />
-                </div>
-                <div className="info-item">
-                  <label>Date d'adhésion</label>
-                  <input type="text" value="20/06/2026" disabled />
-                </div>
-              </div>
-              <div className="info-note">
-                ℹ️ Pour modifier votre nom, prénom, poste ou brigade, veuillez contacter votre Chef de Brigade.
-              </div>
             </div>
           </main>
         </div>

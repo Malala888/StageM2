@@ -1,9 +1,121 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLoaderData, useRouteError } from 'react-router-dom';
 import CNSidebar from '../components/CNSidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
+// ─── Cache mémoire ───
+let cnDashboardCache = null;
+let cnDashboardCacheTime = 0;
+const CACHE_TTL_MS = 15000;
+
+async function fetchCNDashboardData() {
+  const now = Date.now();
+  if (cnDashboardCache && now - cnDashboardCacheTime < CACHE_TTL_MS) {
+    return cnDashboardCache;
+  }
+
+  const [
+    { data: userData },
+    { data: mouvementsData },
+    { data: materielsData },
+    { data: brigadesData },
+    { data: sectionsData },
+  ] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/materiaux/mouvements/'),
+    api.get('/materiaux/materiels/'),
+    api.get('/personnel/brigades/'),
+    api.get('/personnel/sections/'),
+  ]);
+
+  // Enrichir l'utilisateur avec l'objet brigade et section
+  const brigade = brigadesData.find(b => b.id === userData.brigade) || null;
+  const section = sectionsData.find(s => s.id === brigade?.section) || null;
+  const user = { ...userData, brigade, section };
+
+  // Filtrer les mouvements où l'utilisateur est agent_concerner
+  const mesMouvements = mouvementsData.filter(m => m.agent_concerner === userData.id);
+
+  // Statistiques
+  const mesEmpruntsEnCours = mesMouvements.filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS');
+  const mesRetards = mesMouvements.filter(m => m.statut === 'EN_RETARD');
+
+  // Matériels assignés (ceux qui sont en cours d'emprunt)
+  const materielsAssignes = mesMouvements
+    .filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS')
+    .map(m => {
+      const mat = materielsData.find(mat => mat.id === m.materiel);
+      return mat ? { ...mat, quantite: m.quantite, mouvement_id: m.id } : null;
+    })
+    .filter(Boolean);
+
+  // Derniers mouvements (5 derniers)
+  const derniers = mesMouvements.slice(0, 5);
+
+  // Activités récentes
+  const activitesList = derniers.map((m, index) => ({
+    id: m.id || index,
+    type: m.type,
+    materiel: m.materiel ? materielsData.find(mat => mat.id === m.materiel)?.nom || 'Matériel' : 'Matériel',
+    date: new Date(m.date_mouvement).toLocaleDateString('fr-FR'),
+    statut: m.statut,
+  }));
+
+  const result = {
+    user,
+    stats: {
+      materielsAssignes: materielsAssignes.length,
+      empruntsEnCours: mesEmpruntsEnCours.length,
+      retards: mesRetards.length,
+    },
+    derniersMouvements: derniers,
+    activites: activitesList,
+    materielsAssignesList: materielsAssignes,
+  };
+
+  cnDashboardCache = result;
+  cnDashboardCacheTime = now;
+  return result;
+}
+
+// ─── Loader ───
+export async function cnDashboardLoader() {
+  return fetchCNDashboardData();
+}
+
+// ─── ErrorElement ───
+export function CNDashboardError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement du tableau de bord CN:', error);
+  return (
+    <div className="dashboard-body">
+      <div className="app">
+        <CNSidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}>
+          <div style={{ color: 'red', textAlign: 'center' }}>
+            <h2>Erreur</h2>
+            <p>Impossible de charger les données. Veuillez réessayer.</p>
+            <button onClick={() => window.location.reload()} className="btn-sm primary">Réessayer</button>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── Composant principal ───
 const CNDashboard = () => {
+  const { user, stats, derniersMouvements, activites, materielsAssignesList } = useLoaderData();
+
+  const brigadeName = user?.brigade?.nom || 'N/A';
+  const sectionName = user?.section?.nom || 'N/A';
+
+  // Handler pour demander un emprunt
+  const handleDemanderEmprunt = (materielId, nom) => {
+    alert(`📤 Demande d'emprunt pour "${nom}" envoyée à votre Chef de Brigade.`);
+  };
+
   return (
     <>
       <style>{`
@@ -52,13 +164,12 @@ const CNDashboard = () => {
         .app {
           position: relative;
           z-index: 1;
-          display: block;          /* plus de flex, sidebar fixed */
+          display: block;
           min-height: 100vh;
         }
 
-        /* ─── Le main est décalé pour la sidebar fixed ─── */
         .main {
-          margin-left: 240px;      /* largeur de la sidebar */
+          margin-left: 240px;
           padding: 28px 36px;
           min-height: 100vh;
         }
@@ -296,15 +407,11 @@ const CNDashboard = () => {
           margin-bottom: 28px;
         }
 
-        /* ─── Responsive ─── */
         @media (max-width: 1024px) {
           .main { margin-left: 200px; padding: 20px 24px; }
         }
         @media (max-width: 768px) {
-          .main {
-            margin-left: 0;        /* la sidebar devient relative ou on garde fixed mais on réduit le padding */
-            padding: 16px;
-          }
+          .main { margin-left: 0; padding: 16px; }
           .card-grid { grid-template-columns: 1fr; }
           .widget-grid { grid-template-columns: repeat(2, 1fr); }
           .page-header { flex-direction: column; align-items: flex-start; gap: 12px; }
@@ -317,7 +424,6 @@ const CNDashboard = () => {
 
       <div className="dashboard-body">
         <div className="app">
-          {/* Sidebar fixed, importée depuis le composant séparé */}
           <CNSidebar />
 
           <main className="main">
@@ -325,14 +431,14 @@ const CNDashboard = () => {
               <div>
                 <h1>Tableau de bord</h1>
                 <div className="sub">
-                  Bienvenue, Cantonnier <span className="role-badge">CN</span>
+                  Bienvenue, {user?.prenom || 'Cantonnier'} {user?.nom || ''} <span className="role-badge">CN</span>
                 </div>
               </div>
               <div className="user-badge">
-                <div className="avatar">CN</div>
+                <div className="avatar">{user?.prenom ? user.prenom[0] : 'C'}</div>
                 <div>
-                  <div className="name">Ranaivo Marie</div>
-                  <div className="role">Cantonnier • BR FI</div>
+                  <div className="name">{user?.prenom || 'Cantonnier'} {user?.nom || ''}</div>
+                  <div className="role">Cantonnier • {brigadeName}</div>
                 </div>
               </div>
             </div>
@@ -340,46 +446,37 @@ const CNDashboard = () => {
             <div className="widget-grid">
               <div className="widget">
                 <div className="icon">
-                  <svg viewBox="0 0 24 24">
-                    <rect x="2" y="7" width="20" height="14" rx="2" />
-                    <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
-                  </svg>
+                  <svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2" /><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" /></svg>
                 </div>
                 <div className="label">Matériels assignés</div>
-                <div className="value">12</div>
-                <span className="change">+2 ce mois</span>
+                <div className="value">{stats.materielsAssignes}</div>
+                <span className="change">En votre possession</span>
               </div>
               <div className="widget">
                 <div className="icon">
-                  <svg viewBox="0 0 24 24">
-                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                  </svg>
+                  <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
                 </div>
                 <div className="label">En cours d'emprunt</div>
-                <div className="value">1</div>
-                <span className="change">0 depuis hier</span>
+                <div className="value">{stats.empruntsEnCours}</div>
+                <span className="change down">En cours</span>
               </div>
               <div className="widget">
                 <div className="icon">
-                  <svg viewBox="0 0 24 24">
-                    <circle cx="12" cy="12" r="10" />
-                    <polyline points="12 6 12 12 16 14" />
-                  </svg>
+                  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
                 </div>
                 <div className="label">Retards</div>
-                <div className="value">0</div>
-                <span className="change" style={{ background: 'rgba(34, 197, 94, 0.12)', color: '#16a34a' }}>Aucun retard</span>
+                <div className="value">{stats.retards}</div>
+                <span className="change" style={{ background: stats.retards > 0 ? 'rgba(239, 68, 68, 0.12)' : 'rgba(34, 197, 94, 0.12)', color: stats.retards > 0 ? '#dc2626' : '#16a34a' }}>
+                  {stats.retards > 0 ? `${stats.retards} retard(s)` : 'Aucun retard'}
+                </span>
               </div>
               <div className="widget">
                 <div className="icon">
-                  <svg viewBox="0 0 24 24">
-                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
-                    <circle cx="12" cy="10" r="3" />
-                  </svg>
+                  <svg viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" /></svg>
                 </div>
                 <div className="label">Brigade</div>
-                <div className="value" style={{ fontSize: '1.2rem' }}>BR FI</div>
-                <span className="change">Fianarantsoa</span>
+                <div className="value" style={{ fontSize: '1.2rem' }}>{brigadeName}</div>
+                <span className="change">{sectionName}</span>
               </div>
             </div>
 
@@ -392,32 +489,28 @@ const CNDashboard = () => {
                 <div className="table-wrap">
                   <table>
                     <thead>
-                      <tr>
-                        <th>Matériel</th>
-                        <th>Type</th>
-                        <th>Date</th>
-                        <th>Statut</th>
-                      </tr>
+                      <tr><th>Matériel</th><th>Type</th><th>Date</th><th>Statut</th></tr>
                     </thead>
                     <tbody>
-                      <tr>
-                        <td>Râteau 5 dents</td>
-                        <td>EMPRUNT</td>
-                        <td>24/07/2026</td>
-                        <td><span className="badge yellow">En cours</span></td>
-                      </tr>
-                      <tr>
-                        <td>Brouette 45L</td>
-                        <td>RETOUR</td>
-                        <td>23/07/2026</td>
-                        <td><span className="badge green">Retourné</span></td>
-                      </tr>
-                      <tr>
-                        <td>Pioche 2kg</td>
-                        <td>EMPRUNT</td>
-                        <td>20/07/2026</td>
-                        <td><span className="badge green">Retourné</span></td>
-                      </tr>
+                      {derniersMouvements.length > 0 ? (
+                        derniersMouvements.map((mvt) => {
+                          const mat = materielsAssignesList.find(m => m.mouvement_id === mvt.id)?.nom || mvt.materiel?.nom || 'N/A';
+                          return (
+                            <tr key={mvt.id}>
+                              <td>{mat}</td>
+                              <td>{mvt.type}</td>
+                              <td>{new Date(mvt.date_mouvement).toLocaleDateString('fr-FR')}</td>
+                              <td>
+                                <span className={`badge ${mvt.statut === 'EN_COURS' ? 'yellow' : mvt.statut === 'RETOURNE' ? 'green' : mvt.statut === 'EN_RETARD' ? 'red' : 'blue'}`}>
+                                  {mvt.statut}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      ) : (
+                        <tr><td colSpan="4">Aucun mouvement récent</td></tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -425,26 +518,17 @@ const CNDashboard = () => {
 
               <div className="card">
                 <h3>Activité récente</h3>
-                <div className="activity-item">
-                  <span className="dot blue"></span>
-                  <span className="text">Emprunt enregistré : <strong>Râteau 5 dents</strong></span>
-                  <span className="time">1h</span>
-                </div>
-                <div className="activity-item">
-                  <span className="dot green"></span>
-                  <span className="text">Retour effectué : <strong>Brouette 45L</strong></span>
-                  <span className="time">3h</span>
-                </div>
-                <div className="activity-item">
-                  <span className="dot yellow"></span>
-                  <span className="text">Nouveau matériel assigné : <strong>Pioche 2kg</strong></span>
-                  <span className="time">hier</span>
-                </div>
-                <div className="activity-item">
-                  <span className="dot green"></span>
-                  <span className="text">Profil mis à jour</span>
-                  <span className="time">hier</span>
-                </div>
+                {activites.length > 0 ? (
+                  activites.map((act, index) => (
+                    <div className="activity-item" key={index}>
+                      <span className={`dot ${act.statut === 'RETOURNE' ? 'green' : act.statut === 'EN_RETARD' ? 'red' : 'blue'}`}></span>
+                      <span className="text">{act.type} : <strong>{act.materiel}</strong></span>
+                      <span className="time">{act.date}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="activity-item">Aucune activité récente</div>
+                )}
               </div>
             </div>
 
@@ -456,32 +540,25 @@ const CNDashboard = () => {
               <div className="table-wrap">
                 <table>
                   <thead>
-                    <tr>
-                      <th>Matériel</th>
-                      <th>État</th>
-                      <th>Quantité</th>
-                      <th>Action</th>
-                    </tr>
+                    <tr><th>Matériel</th><th>État</th><th>Quantité</th><th>Action</th></tr>
                   </thead>
                   <tbody>
-                    <tr>
-                      <td><strong>Râteau 5 dents</strong></td>
-                      <td><span className="badge green">BON</span></td>
-                      <td>2</td>
-                      <td><button className="btn-sm primary">Demander un emprunt</button></td>
-                    </tr>
-                    <tr>
-                      <td><strong>Brouette 45L</strong></td>
-                      <td><span className="badge yellow">MOYEN</span></td>
-                      <td>1</td>
-                      <td><button className="btn-sm primary">Demander un emprunt</button></td>
-                    </tr>
-                    <tr>
-                      <td><strong>Pioche 2kg</strong></td>
-                      <td><span className="badge green">NEUF</span></td>
-                      <td>1</td>
-                      <td><button className="btn-sm primary">Demander un emprunt</button></td>
-                    </tr>
+                    {materielsAssignesList.length > 0 ? (
+                      materielsAssignesList.map((m) => (
+                        <tr key={m.id}>
+                          <td><strong>{m.nom}</strong></td>
+                          <td><span className={`badge ${m.etat === 'NEUF' ? 'green' : m.etat === 'BON' ? 'green' : m.etat === 'MOYEN' ? 'yellow' : m.etat === 'MAUVAIS' ? 'red' : 'red'}`}>{m.etat}</span></td>
+                          <td>{m.quantite}</td>
+                          <td>
+                            <button className="btn-sm primary" onClick={() => handleDemanderEmprunt(m.id, m.nom)}>
+                              Demander un emprunt
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr><td colSpan="4">Aucun matériel assigné</td></tr>
+                    )}
                   </tbody>
                 </table>
               </div>

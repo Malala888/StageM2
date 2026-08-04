@@ -34,12 +34,12 @@ import GLProfil, { glProfilLoader, GLProfilError } from './pages/GLProfil';
 import GLRapports, { glRapportsLoader, GLRapportsError } from './pages/GLRapports';
 import GLParametres, { glParametresLoader, GLParametresError } from './pages/GLParametres';
 // Cantonnier
-import CNDashboard from './pages/CNDashboard';
-import CNMateriels from './pages/CNMateriels';
-import CNMouvements from './pages/CNMouvements';
-import CNProfil from './pages/CNProfil';
-import CNRapports from './pages/CNRapports';
-import CNParametres from './pages/CNParametres';
+import CNDashboard, { cnDashboardLoader, CNDashboardError } from './pages/CNDashboard';
+import CNMateriels, { cnMaterielsLoader, CNMaterielsError } from './pages/CNMateriels';
+import CNMouvements, { cnMouvementsLoader, CNMouvementsError } from './pages/CNMouvements';
+import CNProfil, { cnProfilLoader, CNProfilError } from './pages/CNProfil';
+import CNRapports, { cnRapportsLoader, CNRapportsError } from './pages/CNRapports';
+import CNParametres, { cnParametresLoader, CNParametresError } from './pages/CNParametres';
 
 // Layout racine : englobe toutes les pages et affiche une barre de
 // progression en haut de l'écran pendant qu'un loader de route charge
@@ -257,12 +257,42 @@ const router = createBrowserRouter([
       },
 
       // Cantonnier
-      { path: '/cn/dashboard', element: <CNDashboard /> },
-      { path: '/cn/materiels', element: <CNMateriels /> },
-      { path: '/cn/mouvements', element: <CNMouvements /> },
-      { path: '/cn/profile', element: <CNProfil /> },
-      { path: '/cn/rapports', element: <CNRapports /> },
-      { path: '/cn/parametres', element: <CNParametres /> },
+      {
+        path: '/cn/dashboard',
+        element: <CNDashboard />,
+        loader: cnDashboardLoader,
+        errorElement: <CNDashboardError />,
+      },
+      {
+        path: '/cn/materiels',
+        element: <CNMateriels />,
+        loader: cnMaterielsLoader,
+        errorElement: <CNMaterielsError />,
+      },
+      {
+        path: '/cn/mouvements',
+        element: <CNMouvements />,
+        loader: cnMouvementsLoader,
+        errorElement: <CNMouvementsError />,
+      },
+      {
+        path: '/cn/profile',
+        element: <CNProfil />,
+        loader: cnProfilLoader,
+        errorElement: <CNProfilError />,
+      },
+      {
+        path: '/cn/rapports',
+        element: <CNRapports />,
+        loader: cnRapportsLoader,
+        errorElement: <CNRapportsError />,
+      },
+      {
+        path: '/cn/parametres',
+        element: <CNParametres />,
+        loader: cnParametresLoader,
+        errorElement: <CNParametresError />,
+      },
     ],
   },
 ]);

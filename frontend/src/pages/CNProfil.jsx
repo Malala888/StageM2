@@ -1,17 +1,102 @@
 import React, { useState } from 'react';
+import { useLoaderData, useRouteError } from 'react-router-dom';
 import CNSidebar from '../components/CNSidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
+// ─── Cache mémoire ───
+let cnProfilCache = null;
+let cnProfilCacheTime = 0;
+const CACHE_TTL_MS = 15000;
+
+async function fetchCNProfilData() {
+  const now = Date.now();
+  if (cnProfilCache && now - cnProfilCacheTime < CACHE_TTL_MS) {
+    return cnProfilCache;
+  }
+
+  const [
+    { data: userData },
+    { data: brigadesData },
+    { data: sectionsData },
+  ] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/personnel/brigades/'),
+    api.get('/personnel/sections/'),
+  ]);
+
+  // Enrichir l'utilisateur avec l'objet brigade et section
+  const brigade = brigadesData.find(b => b.id === userData.brigade) || null;
+  const section = sectionsData.find(s => s.id === brigade?.section) || null;
+  const user = { ...userData, brigade, section };
+
+  const result = { user };
+  cnProfilCache = result;
+  cnProfilCacheTime = now;
+  return result;
+}
+
+export async function cnProfilLoader() {
+  return fetchCNProfilData();
+}
+
+export function CNProfilError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement du profil:', error);
+  return (
+    <div className="profil-body">
+      <div className="app">
+        <CNSidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh', flexDirection: 'column' }}>
+          <h2 style={{ color: 'red' }}>Erreur</h2>
+          <p>Impossible de charger votre profil. Veuillez réessayer.</p>
+          <button className="btn-sm primary" onClick={() => window.location.reload()}>Réessayer</button>
+        </main>
+      </div>
+    </div>
+  );
+}
+
 const CNProfil = () => {
-  // ─── States pour les champs modifiables ───
-  const [email, setEmail] = useState('marie.ranaivo@fce.mg');
-  const [telephone, setTelephone] = useState('+261 32 45 678 90');
-  const [adresse, setAdresse] = useState('Fianarantsoa, Madagascar');
+  const { user: initialUser } = useLoaderData();
+
+  // ─── États du formulaire ───
+  const [nom, setNom] = useState(initialUser?.nom || '');
+  const [prenom, setPrenom] = useState(initialUser?.prenom || '');
+  const [email, setEmail] = useState(initialUser?.email || '');
+  const [telephone, setTelephone] = useState('');
+  const [updateSuccess, setUpdateSuccess] = useState('');
+  const [updateError, setUpdateError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const brigadeName = initialUser?.brigade?.nom || 'N/A';
+  const sectionName = initialUser?.section?.nom || 'N/A';
+  const statut = initialUser?.statut || 'ACTIF';
+  const dateInscription = initialUser?.date_inscription
+    ? new Date(initialUser.date_inscription).toLocaleDateString('fr-FR')
+    : 'N/A';
 
   // ─── Handlers ───
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    alert('💾 Profil mis à jour avec succès !');
+    setUpdateError('');
+    setUpdateSuccess('');
+    setIsSubmitting(true);
+
+    try {
+      const payload = { nom, prenom, email };
+      await api.patch(`/accounts/users/${initialUser.id}/`, payload);
+      setUpdateSuccess('✅ Profil mis à jour avec succès !');
+      initialUser.nom = nom;
+      initialUser.prenom = prenom;
+      initialUser.email = email;
+    } catch (err) {
+      console.error(err);
+      const msg = err.response?.data?.detail || err.response?.data?.message || 'Erreur lors de la mise à jour du profil';
+      setUpdateError(`❌ ${msg}`);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -62,13 +147,12 @@ const CNProfil = () => {
         .app {
           position: relative;
           z-index: 1;
-          display: block;          /* plus de flex, sidebar fixed */
+          display: block;
           min-height: 100vh;
         }
 
-        /* ─── Le main est décalé pour la sidebar fixed ─── */
         .main {
-          margin-left: 240px;      /* largeur de la sidebar */
+          margin-left: 240px;
           padding: 28px 36px;
           min-height: 100vh;
         }
@@ -199,8 +283,7 @@ const CNProfil = () => {
           letter-spacing: 0.05em;
           color: #475569;
         }
-        .form-grid .field input,
-        .form-grid .field textarea {
+        .form-grid .field input {
           padding: 10px 14px;
           border-radius: 10px;
           border: 1.5px solid #e2e8f0;
@@ -210,8 +293,7 @@ const CNProfil = () => {
           outline: none;
           transition: border-color 0.2s, box-shadow 0.2s;
         }
-        .form-grid .field input:focus,
-        .form-grid .field textarea:focus {
+        .form-grid .field input:focus {
           border-color: #2563eb;
           box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
         }
@@ -243,15 +325,28 @@ const CNProfil = () => {
           border-top: 1px solid #e2e8f0;
         }
 
-        /* ─── Responsive ─── */
+        .success-message {
+          color: #16a34a;
+          background: #dcfce7;
+          padding: 10px 14px;
+          border-radius: 8px;
+          margin-bottom: 12px;
+          font-size: 0.9rem;
+        }
+        .error-message {
+          color: #dc2626;
+          background: #fee2e2;
+          padding: 10px 14px;
+          border-radius: 8px;
+          margin-bottom: 12px;
+          font-size: 0.9rem;
+        }
+
         @media (max-width: 1024px) {
           .main { margin-left: 200px; padding: 20px 24px; }
         }
         @media (max-width: 768px) {
-          .main {
-            margin-left: 0;        /* la sidebar devient relative ou on garde fixed mais on réduit le padding */
-            padding: 16px;
-          }
+          .main { margin-left: 0; padding: 16px; }
           .page-header { flex-direction: column; align-items: flex-start; gap: 12px; }
           .form-grid { grid-template-columns: 1fr; }
           .form-grid .field.full { grid-column: span 1; }
@@ -261,7 +356,6 @@ const CNProfil = () => {
 
       <div className="profil-body">
         <div className="app">
-          {/* Sidebar fixed, importée depuis le composant séparé */}
           <CNSidebar />
 
           <main className="main">
@@ -273,35 +367,50 @@ const CNProfil = () => {
                 </div>
               </div>
               <div className="user-badge">
-                <div className="avatar">CN</div>
+                <div className="avatar">{initialUser?.prenom?.[0] || 'C'}</div>
                 <div>
-                  <div className="name">Ranaivo Marie</div>
-                  <div className="role">Cantonnier • BR FI</div>
+                  <div className="name">{initialUser?.prenom || 'Cantonnier'} {initialUser?.nom || ''}</div>
+                  <div className="role">Cantonnier • {brigadeName}</div>
                 </div>
               </div>
             </div>
 
             <div className="card">
               <div className="profile-header">
-                <div className="avatar-large">RM</div>
+                <div className="avatar-large">{initialUser?.prenom?.[0] || 'C'}{initialUser?.nom?.[0] || 'N'}</div>
                 <div className="info">
-                  <h2>Ranaivo Marie</h2>
-                  <p>Cantonnier (CN) • Brigade BR FI • Section Fianarantsoa</p>
+                  <h2>{initialUser?.prenom || 'Cantonnier'} {initialUser?.nom || ''}</h2>
+                  <p>Cantonnier (CN) • Brigade {brigadeName} • Section {sectionName}</p>
                   <p style={{ fontSize: '0.85rem', color: '#94a3b8' }}>
-                    Compte validé le 20/06/2026 • Actif
+                    Compte validé le {dateInscription} • {statut}
                   </p>
                 </div>
               </div>
+
+              {updateSuccess && <div className="success-message">{updateSuccess}</div>}
+              {updateError && <div className="error-message">{updateError}</div>}
 
               <form onSubmit={handleSubmit}>
                 <div className="form-grid">
                   <div className="field">
                     <label htmlFor="nom">Nom</label>
-                    <input type="text" id="nom" value="Ranaivo" disabled />
+                    <input
+                      type="text"
+                      id="nom"
+                      value={nom}
+                      onChange={(e) => setNom(e.target.value)}
+                      required
+                    />
                   </div>
                   <div className="field">
                     <label htmlFor="prenom">Prénom</label>
-                    <input type="text" id="prenom" value="Marie" disabled />
+                    <input
+                      type="text"
+                      id="prenom"
+                      value={prenom}
+                      onChange={(e) => setPrenom(e.target.value)}
+                      required
+                    />
                   </div>
                   <div className="field">
                     <label htmlFor="email">Email</label>
@@ -310,6 +419,7 @@ const CNProfil = () => {
                       id="email"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
+                      required
                     />
                   </div>
                   <div className="field">
@@ -319,15 +429,7 @@ const CNProfil = () => {
                       id="telephone"
                       value={telephone}
                       onChange={(e) => setTelephone(e.target.value)}
-                    />
-                  </div>
-                  <div className="field full">
-                    <label htmlFor="adresse">Adresse (optionnel)</label>
-                    <input
-                      type="text"
-                      id="adresse"
-                      value={adresse}
-                      onChange={(e) => setAdresse(e.target.value)}
+                      placeholder="+261 XX XXX XX XX"
                     />
                   </div>
                   <div className="field">
@@ -336,25 +438,30 @@ const CNProfil = () => {
                   </div>
                   <div className="field">
                     <label>Brigade</label>
-                    <input type="text" value="BR FI – Fianarantsoa" disabled />
+                    <input type="text" value={brigadeName} disabled />
+                  </div>
+                  <div className="field">
+                    <label>Section</label>
+                    <input type="text" value={sectionName} disabled />
                   </div>
                   <div className="field">
                     <label>Statut</label>
                     <input
                       type="text"
-                      value="ACTIF"
-                      style={{ color: '#16a34a', fontWeight: 600 }}
+                      value={statut}
+                      style={{ color: statut === 'ACTIF' ? '#16a34a' : '#dc2626', fontWeight: 600 }}
                       disabled
                     />
                   </div>
                   <div className="field">
                     <label>Date d'adhésion</label>
-                    <input type="text" value="20/06/2026" disabled />
+                    <input type="text" value={dateInscription} disabled />
                   </div>
                 </div>
+
                 <div className="form-actions">
-                  <button type="submit" className="btn-sm primary" style={{ padding: '10px 28px' }}>
-                    💾 Mettre à jour
+                  <button type="submit" className="btn-sm primary" style={{ padding: '10px 28px' }} disabled={isSubmitting}>
+                    {isSubmitting ? 'Enregistrement...' : '💾 Mettre à jour'}
                   </button>
                 </div>
               </form>

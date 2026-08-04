@@ -1,19 +1,93 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useLoaderData, useRouteError } from 'react-router-dom';
 import CNSidebar from '../components/CNSidebar';
+import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
+// ─── Cache mémoire ───
+let cnMouvementsCache = null;
+let cnMouvementsCacheTime = 0;
+const CACHE_TTL_MS = 15000;
+
+async function fetchCNMouvementsData() {
+  const now = Date.now();
+  if (cnMouvementsCache && now - cnMouvementsCacheTime < CACHE_TTL_MS) {
+    return cnMouvementsCache;
+  }
+
+  const [
+    { data: userData },
+    { data: materielsData },
+    { data: mouvementsData },
+    { data: brigadesData },
+  ] = await Promise.all([
+    api.get('/accounts/users/me/'),
+    api.get('/materiaux/materiels/'),
+    api.get('/materiaux/mouvements/'),
+    api.get('/personnel/brigades/'),
+  ]);
+
+  // Enrichir l'utilisateur avec l'objet brigade
+  const brigade = brigadesData.find(b => b.id === userData.brigade) || null;
+  const user = { ...userData, brigade };
+
+  // Filtrer les mouvements où l'utilisateur est agent_concerner
+  const mesMouvements = mouvementsData.filter(m => m.agent_concerner === userData.id);
+
+  const result = {
+    user,
+    materiels: materielsData,
+    mouvements: mesMouvements,
+  };
+
+  cnMouvementsCache = result;
+  cnMouvementsCacheTime = now;
+  return result;
+}
+
+// ─── Loader ───
+export async function cnMouvementsLoader() {
+  return fetchCNMouvementsData();
+}
+
+// ─── ErrorElement ───
+export function CNMouvementsError() {
+  const error = useRouteError();
+  console.error('Erreur lors du chargement des mouvements CN:', error);
+  return (
+    <div className="mouvements-body">
+      <div className="app">
+        <CNSidebar />
+        <main className="main" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh', flexDirection: 'column' }}>
+          <h2 style={{ color: 'red' }}>Erreur</h2>
+          <p>Impossible de charger vos mouvements. Veuillez réessayer.</p>
+          <button className="btn-sm primary" onClick={() => window.location.reload()}>Réessayer</button>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── Composant principal ───
 const CNMouvements = () => {
-  // ─── States pour le formulaire ───
+  const { user, materiels, mouvements: initialMouvements } = useLoaderData();
+
+  // ─── États pour le formulaire ───
   const [materiel, setMateriel] = useState('');
   const [quantite, setQuantite] = useState(1);
   const [date, setDate] = useState('');
   const [duree, setDuree] = useState(1);
   const [motif, setMotif] = useState('');
 
-  // ─── States pour les filtres ───
+  // ─── États pour les filtres ───
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('');
   const [filterDate, setFilterDate] = useState('');
+  const [filteredMouvements, setFilteredMouvements] = useState(initialMouvements);
+
+  // ─── États pour la soumission ───
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
 
   // ─── Référence pour le champ date ───
   const dateInputRef = useRef(null);
@@ -27,25 +101,87 @@ const CNMouvements = () => {
     }
   }, []);
 
-  // ─── Handlers ───
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    alert('📤 Demande d\'emprunt envoyée avec succès !');
-    // Réinitialiser le formulaire
-    setMateriel('');
-    setQuantite(1);
-    setDuree(1);
-    setMotif('');
-  };
+  // ─── Appliquer les filtres ───
+  useEffect(() => {
+    let result = initialMouvements;
 
+    if (searchTerm.trim()) {
+      result = result.filter(m =>
+        (m.materiel?.nom || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        m.numero.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+
+    if (filterType) {
+      result = result.filter(m => m.type === filterType);
+    }
+
+    if (filterDate) {
+      result = result.filter(m => m.date_mouvement === filterDate);
+    }
+
+    setFilteredMouvements(result);
+  }, [searchTerm, filterType, filterDate, initialMouvements]);
+
+  // ─── Handlers ───
   const handleFilter = (e) => {
     e.preventDefault();
-    alert('Filtres appliqués !');
+  };
+
+  const handleResetFilters = () => {
+    setSearchTerm('');
+    setFilterType('');
+    setFilterDate('');
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSubmitError('');
+    setSubmitting(true);
+
+    if (!materiel || !quantite || !date || !duree || !motif) {
+      setSubmitError('Veuillez remplir tous les champs.');
+      setSubmitting(false);
+      return;
+    }
+
+    const dateRetourPrevue = new Date(date);
+    dateRetourPrevue.setDate(dateRetourPrevue.getDate() + parseInt(duree));
+
+    const payload = {
+      type: 'EMPRUNT',
+      materiel: parseInt(materiel),
+      quantite: parseInt(quantite),
+      date_mouvement: date,
+      date_retour_prevue: dateRetourPrevue.toISOString().split('T')[0],
+      agent_concerner: user.id,
+      brigade: user.brigade?.id || null,
+      commentaire: motif,
+    };
+
+    try {
+      await api.post('/materiaux/mouvements/', payload);
+      alert('✅ Demande d\'emprunt envoyée avec succès !');
+      setMateriel('');
+      setQuantite(1);
+      setDuree(1);
+      setMotif('');
+
+      const { data: newMouvements } = await api.get('/materiaux/mouvements/');
+      setFilteredMouvements(newMouvements.filter(m => m.agent_concerner === user.id));
+    } catch (err) {
+      console.error(err);
+      setSubmitError('Erreur lors de l\'envoi de la demande.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleDetail = (numero) => {
     alert(`📄 Détail du mouvement : ${numero}`);
   };
+
+  const brigadeName = user?.brigade?.nom || 'N/A';
 
   return (
     <>
@@ -95,13 +231,12 @@ const CNMouvements = () => {
         .app {
           position: relative;
           z-index: 1;
-          display: block;          /* plus de flex, sidebar fixed */
+          display: block;
           min-height: 100vh;
         }
 
-        /* ─── Le main est décalé pour la sidebar fixed ─── */
         .main {
-          margin-left: 240px;      /* largeur de la sidebar */
+          margin-left: 240px;
           padding: 28px 36px;
           min-height: 100vh;
         }
@@ -307,15 +442,17 @@ const CNMouvements = () => {
           border-color: #2563eb;
         }
 
-        /* ─── Responsive ─── */
+        .submit-error {
+          color: #dc2626;
+          font-size: 0.85rem;
+          margin-top: 8px;
+        }
+
         @media (max-width: 1024px) {
           .main { margin-left: 200px; padding: 20px 24px; }
         }
         @media (max-width: 768px) {
-          .main {
-            margin-left: 0;        /* la sidebar devient relative ou on garde fixed mais on réduit le padding */
-            padding: 16px;
-          }
+          .main { margin-left: 0; padding: 16px; }
           .page-header { flex-direction: column; align-items: flex-start; gap: 12px; }
           .form-row { grid-template-columns: 1fr; }
         }
@@ -323,7 +460,6 @@ const CNMouvements = () => {
 
       <div className="mouvements-body">
         <div className="app">
-          {/* Sidebar fixed, importée depuis le composant séparé */}
           <CNSidebar />
 
           <main className="main">
@@ -335,10 +471,10 @@ const CNMouvements = () => {
                 </div>
               </div>
               <div className="user-badge">
-                <div className="avatar">CN</div>
+                <div className="avatar">{user?.prenom ? user.prenom[0] : 'C'}</div>
                 <div>
-                  <div className="name">Ranaivo Marie</div>
-                  <div className="role">Cantonnier • BR FI</div>
+                  <div className="name">{user?.prenom || 'Cantonnier'} {user?.nom || ''}</div>
+                  <div className="role">Cantonnier • {brigadeName}</div>
                 </div>
               </div>
             </div>
@@ -349,7 +485,7 @@ const CNMouvements = () => {
               <form onSubmit={handleSubmit}>
                 <div className="form-row">
                   <div className="field">
-                    <label htmlFor="materiel">Matériel</label>
+                    <label htmlFor="materiel">Matériel *</label>
                     <select
                       id="materiel"
                       value={materiel}
@@ -357,14 +493,13 @@ const CNMouvements = () => {
                       required
                     >
                       <option value="">Sélectionner</option>
-                      <option value="1">Râteau 5 dents</option>
-                      <option value="2">Brouette 45L</option>
-                      <option value="3">Pelle ronde</option>
-                      <option value="4">Pioche 2kg</option>
+                      {materiels.map(m => (
+                        <option key={m.id} value={m.id}>{m.nom}</option>
+                      ))}
                     </select>
                   </div>
                   <div className="field">
-                    <label htmlFor="quantite">Quantité</label>
+                    <label htmlFor="quantite">Quantité *</label>
                     <input
                       type="number"
                       id="quantite"
@@ -375,7 +510,7 @@ const CNMouvements = () => {
                     />
                   </div>
                   <div className="field">
-                    <label htmlFor="date">Date souhaitée</label>
+                    <label htmlFor="date">Date souhaitée *</label>
                     <input
                       type="date"
                       id="date"
@@ -386,7 +521,7 @@ const CNMouvements = () => {
                     />
                   </div>
                   <div className="field">
-                    <label htmlFor="duree">Durée (jours)</label>
+                    <label htmlFor="duree">Durée (jours) *</label>
                     <input
                       type="number"
                       id="duree"
@@ -399,7 +534,7 @@ const CNMouvements = () => {
                 </div>
                 <div className="form-row">
                   <div className="field" style={{ gridColumn: 'span 2' }}>
-                    <label htmlFor="motif">Motif</label>
+                    <label htmlFor="motif">Motif *</label>
                     <input
                       type="text"
                       id="motif"
@@ -410,12 +545,14 @@ const CNMouvements = () => {
                     />
                   </div>
                 </div>
+                {submitError && <div className="submit-error">{submitError}</div>}
                 <button
                   type="submit"
                   className="btn-sm primary"
                   style={{ padding: '10px 24px', fontSize: '0.85rem' }}
+                  disabled={submitting}
                 >
-                  📤 Envoyer la demande
+                  {submitting ? 'Envoi en cours...' : '📤 Envoyer la demande'}
                 </button>
               </form>
               <div style={{ marginTop: '10px', fontSize: '0.75rem', color: '#94a3b8' }}>
@@ -425,11 +562,11 @@ const CNMouvements = () => {
 
             {/* ─── Historique ─── */}
             <div className="card">
-              <h3>📋 Historique de mes mouvements</h3>
+              <h3>📋 Historique de mes mouvements ({filteredMouvements.length})</h3>
               <div className="filters">
                 <input
                   type="text"
-                  placeholder="🔍 Rechercher..."
+                  placeholder="🔍 Rechercher (n°, matériel)..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
@@ -453,6 +590,13 @@ const CNMouvements = () => {
                 >
                   Filtrer
                 </button>
+                <button
+                  className="btn-sm outline"
+                  style={{ padding: '8px 20px' }}
+                  onClick={handleResetFilters}
+                >
+                  Réinitialiser
+                </button>
               </div>
               <div className="table-wrap">
                 <table>
@@ -467,46 +611,42 @@ const CNMouvements = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    <tr>
-                      <td><strong>MVT-2026-0005</strong></td>
-                      <td>Râteau 5 dents</td>
-                      <td><span className="type-badge emprunt">EMPRUNT</span></td>
-                      <td>24/07/2026</td>
-                      <td><span className="badge yellow">En attente</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm outline" onClick={() => handleDetail('MVT-2026-0005')}>📄</button>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>MVT-2026-0004</strong></td>
-                      <td>Brouette 45L</td>
-                      <td><span className="type-badge retour">RETOUR</span></td>
-                      <td>23/07/2026</td>
-                      <td><span className="badge green">Retourné</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm outline" onClick={() => handleDetail('MVT-2026-0004')}>📄</button>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>MVT-2026-0003</strong></td>
-                      <td>Pelle ronde</td>
-                      <td><span className="type-badge emprunt">EMPRUNT</span></td>
-                      <td>20/07/2026</td>
-                      <td><span className="badge green">Retourné</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm outline" onClick={() => handleDetail('MVT-2026-0003')}>📄</button>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td><strong>MVT-2026-0002</strong></td>
-                      <td>Pioche 2kg</td>
-                      <td><span className="type-badge emprunt">EMPRUNT</span></td>
-                      <td>18/07/2026</td>
-                      <td><span className="badge yellow">En cours</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-sm outline" onClick={() => handleDetail('MVT-2026-0002')}>📄</button>
-                      </td>
-                    </tr>
+                    {filteredMouvements.length === 0 ? (
+                      <tr>
+                        <td colSpan="6" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
+                          Aucun mouvement trouvé
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredMouvements.map((m) => {
+                        const typeClass = {
+                          'APPROVISIONNEMENT': 'appro',
+                          'EMPRUNT': 'emprunt',
+                          'RETOUR': 'retour',
+                        }[m.type] || '';
+
+                        const statutClass = {
+                          'EN_COURS': 'yellow',
+                          'RETOURNE': 'green',
+                          'EN_RETARD': 'red',
+                          'PERDU': 'red',
+                          'ANNULE': 'gray',
+                        }[m.statut] || 'gray';
+
+                        return (
+                          <tr key={m.id}>
+                            <td><strong>{m.numero}</strong></td>
+                            <td>{m.materiel?.nom || 'N/A'}</td>
+                            <td><span className={`type-badge ${typeClass}`}>{m.type}</span></td>
+                            <td>{new Date(m.date_mouvement).toLocaleDateString('fr-FR')}</td>
+                            <td><span className={`badge ${statutClass}`}>{m.statut}</span></td>
+                            <td className="actions-cell">
+                              <button className="btn-sm outline" onClick={() => handleDetail(m.numero)}>📄 Détail</button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
                   </tbody>
                 </table>
               </div>
