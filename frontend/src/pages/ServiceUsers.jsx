@@ -133,12 +133,46 @@ const ServiceUsers = () => {
     setStatusFilter('');
   };
 
-  const handleAddUser = () => {
-    alert('➕ Ajouter un nouvel utilisateur');
+  // ─── Reproduit côté frontend les règles hiérarchiques du backend (_user_can_validate) ───
+  // pour cacher les boutons Modifier/Supprimer/Valider/Rejeter quand l'action serait de
+  // toute façon refusée par le serveur (Chef Service → Chef Section → Chef Brigade → GL/CN).
+  const getUserBrigadeId = () => {
+    if (user?.brigade) return user.brigade;
+    const b = brigades.find(br => br.chef_brigade === user?.id);
+    return b ? b.id : null;
   };
 
-  const handleEdit = (nom) => {
-    alert(`✏️ Modifier : ${nom}`);
+  const canManage = (target) => {
+    if (!user) return false;
+    if (target.id === user.id) return true;
+    if (user.role === 'ADMIN') return target.role === 'CHEF_SECTION';
+    if (user.role === 'CHEF_SECTION') {
+      return target.role === 'CHEF_BRIGADE' && !!user.section && target.section === user.section;
+    }
+    if (user.role === 'CHEF_BRIGADE') {
+      const brigadeId = getUserBrigadeId();
+      return ['GL', 'CN'].includes(target.role) && !!brigadeId && target.brigade === brigadeId;
+    }
+    return false;
+  };
+
+  const handleEdit = async (u) => {
+    const nom = prompt('Nom :', u.nom);
+    if (!nom) return;
+    const prenom = prompt('Prénom :', u.prenom);
+    if (!prenom) return;
+    const email = prompt('Email :', u.email);
+    if (!email) return;
+
+    try {
+      await api.patch(`/accounts/users/${u.id}/`, { nom, prenom, email });
+      alert('✅ Utilisateur modifié avec succès');
+      window.location.reload();
+    } catch (err) {
+      const msg = err.response?.data?.error
+        || (err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de la modification');
+      alert(`❌ ${msg}`);
+    }
   };
 
   const handleDelete = async (id, nom) => {
@@ -148,7 +182,8 @@ const ServiceUsers = () => {
       alert('✅ Utilisateur supprimé');
       window.location.reload();
     } catch (err) {
-      alert('❌ Erreur lors de la suppression');
+      const msg = err.response?.data?.error || 'Vous n\'avez peut-être pas les droits sur ce compte (seul le supérieur hiérarchique direct peut agir).';
+      alert(`❌ Erreur lors de la suppression : ${msg}`);
     }
   };
 
@@ -158,7 +193,8 @@ const ServiceUsers = () => {
       alert(`✅ ${nom} validé avec succès`);
       window.location.reload();
     } catch (err) {
-      alert('❌ Erreur lors de la validation');
+      const msg = err.response?.data?.error || 'Erreur lors de la validation';
+      alert(`❌ ${msg}`);
     }
   };
 
@@ -169,42 +205,108 @@ const ServiceUsers = () => {
       alert(`❌ ${nom} rejeté`);
       window.location.reload();
     } catch (err) {
-      alert('❌ Erreur lors du rejet');
+      const msg = err.response?.data?.error || 'Erreur lors du rejet';
+      alert(`❌ ${msg}`);
     }
   };
 
-  const handleAddSection = () => {
-    if (newSection.trim()) {
-      alert(`➕ Section ajoutée : ${newSection}`);
-      setNewSection('');
-    } else {
+  const handleAddSection = async () => {
+    if (!newSection.trim()) {
       alert('Veuillez saisir un nom de section');
+      return;
+    }
+    const code = prompt('Code de la section (ex: FIA) :');
+    if (!code) return;
+    try {
+      await api.post('/personnel/sections/', { nom: newSection.trim(), code: code.toUpperCase() });
+      alert(`✅ Section "${newSection}" ajoutée`);
+      setNewSection('');
+      window.location.reload();
+    } catch (err) {
+      const msg = err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de l\'ajout';
+      alert(`❌ ${msg}`);
     }
   };
 
-  const handleAddBrigade = () => {
-    if (newBrigade.trim()) {
-      alert(`➕ Brigade ajoutée : ${newBrigade} (Section: ${brigadeSection || 'Non spécifiée'})`);
-      setNewBrigade('');
-    } else {
+  const handleAddBrigade = async () => {
+    if (!newBrigade.trim()) {
       alert('Veuillez saisir un nom de brigade');
+      return;
+    }
+    if (!brigadeSection) {
+      alert('Veuillez sélectionner une section');
+      return;
+    }
+    const code = prompt('Code de la brigade (ex: BOA) :');
+    if (!code) return;
+    try {
+      await api.post('/personnel/brigades/', {
+        nom: newBrigade.trim(),
+        code: code.toUpperCase(),
+        section: parseInt(brigadeSection),
+      });
+      alert(`✅ Brigade "${newBrigade}" ajoutée`);
+      setNewBrigade('');
+      setBrigadeSection('');
+      window.location.reload();
+    } catch (err) {
+      const msg = err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de l\'ajout';
+      alert(`❌ ${msg}`);
     }
   };
 
-  const handleEditSection = (nom) => {
-    alert(`✏️ Modifier la section : ${nom}`);
+  const handleEditSection = async (s) => {
+    const nom = prompt('Nom de la section :', s.nom);
+    if (!nom) return;
+    const code = prompt('Code de la section :', s.code);
+    if (!code) return;
+    try {
+      await api.patch(`/personnel/sections/${s.id}/`, { nom, code: code.toUpperCase() });
+      alert('✅ Section modifiée');
+      window.location.reload();
+    } catch (err) {
+      const msg = err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de la modification';
+      alert(`❌ ${msg}`);
+    }
   };
 
-  const handleDeleteSection = (nom) => {
-    alert(`🗑️ Supprimer la section : ${nom}`);
+  const handleDeleteSection = async (s) => {
+    if (!confirm(`Supprimer la section "${s.nom}" ?`)) return;
+    try {
+      await api.delete(`/personnel/sections/${s.id}/`);
+      alert('✅ Section supprimée');
+      window.location.reload();
+    } catch (err) {
+      // Brigade a une FK RESTRICT vers Section : ça échoue tant que des brigades y sont rattachées
+      alert('❌ Impossible de supprimer : des brigades sont encore rattachées à cette section.');
+    }
   };
 
-  const handleEditBrigade = (nom) => {
-    alert(`✏️ Modifier la brigade : ${nom}`);
+  const handleEditBrigade = async (b) => {
+    const nom = prompt('Nom de la brigade :', b.nom);
+    if (!nom) return;
+    const code = prompt('Code de la brigade :', b.code);
+    if (!code) return;
+    try {
+      await api.patch(`/personnel/brigades/${b.id}/`, { nom, code: code.toUpperCase() });
+      alert('✅ Brigade modifiée');
+      window.location.reload();
+    } catch (err) {
+      const msg = err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de la modification';
+      alert(`❌ ${msg}`);
+    }
   };
 
-  const handleDeleteBrigade = (nom) => {
-    alert(`🗑️ Supprimer la brigade : ${nom}`);
+  const handleDeleteBrigade = async (b) => {
+    if (!confirm(`Supprimer la brigade "${b.nom}" ?`)) return;
+    try {
+      await api.delete(`/personnel/brigades/${b.id}/`);
+      alert('✅ Brigade supprimée');
+      window.location.reload();
+    } catch (err) {
+      const msg = err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de la suppression';
+      alert(`❌ ${msg}`);
+    }
   };
 
   // Trouver la section d'une brigade
@@ -622,7 +724,7 @@ const ServiceUsers = () => {
                 <div className="avatar">{user?.nom ? user.nom[0] : 'AD'}</div>
                 <div>
                   <div className="name">{user?.nom || 'Admin'}</div>
-                  <div className="role">Chef Service</div>
+                  <div className="role">{user?.role || '—'}</div>
                 </div>
               </div>
             </div>
@@ -631,11 +733,7 @@ const ServiceUsers = () => {
             <div className="card">
               <h3>
                 👥 Comptes utilisateurs ({filteredUsers.length})
-                <span>
-                  <button className="btn-sm success" style={{ padding: '8px 16px' }} onClick={handleAddUser}>
-                    + Nouvel utilisateur
-                  </button>
-                </span>
+                <span></span>
               </h3>
 
               <div className="filters">
@@ -721,15 +819,19 @@ const ServiceUsers = () => {
                             <td>{brigadeName}</td>
                             <td><span className={`badge ${statusClass}`}>{u.statut}</span></td>
                             <td className="actions-cell">
-                              {u.statut === 'EN_ATTENTE' && (
+                              {u.statut === 'EN_ATTENTE' && canManage(u) && (
                                 <>
                                   <button className="btn-sm success" onClick={() => handleValidate(u.id, `${u.nom} ${u.prenom}`)}>Valider</button>
                                   <button className="btn-sm danger" onClick={() => handleReject(u.id, `${u.nom} ${u.prenom}`)}>Rejeter</button>
                                 </>
                               )}
-                              <button className="btn-sm outline" onClick={() => handleEdit(`${u.nom} ${u.prenom}`)}>✏️</button>
-                              <button className="btn-sm danger" onClick={() => handleDelete(u.id, `${u.nom} ${u.prenom}`)}>🗑️</button>
-                              {u.statut !== 'EN_ATTENTE' && (
+                              {canManage(u) && (
+                                <>
+                                  <button className="btn-sm outline" onClick={() => handleEdit(u)}>✏️</button>
+                                  <button className="btn-sm danger" onClick={() => handleDelete(u.id, `${u.nom} ${u.prenom}`)}>🗑️</button>
+                                </>
+                              )}
+                              {u.statut !== 'EN_ATTENTE' && canManage(u) && (
                                 <select
                                   className="status-select"
                                   defaultValue={u.statut}
@@ -747,6 +849,9 @@ const ServiceUsers = () => {
                                   <option value="SUSPENDU">SUSPENDU</option>
                                   <option value="ARCHIVE">ARCHIVE</option>
                                 </select>
+                              )}
+                              {!canManage(u) && u.id !== user?.id && (
+                                <span style={{ color: '#94a3b8', fontSize: '0.8rem' }}>—</span>
                               )}
                             </td>
                           </tr>
@@ -816,8 +921,8 @@ const ServiceUsers = () => {
                             <td>{s.brigades || 0}</td>
                             <td>{s.agents || 0}</td>
                             <td className="actions-cell">
-                              <button className="btn-sm outline" onClick={() => handleEditSection(s.nom)}>✏️</button>
-                              <button className="btn-sm danger" onClick={() => handleDeleteSection(s.nom)}>🗑️</button>
+                              <button className="btn-sm outline" onClick={() => handleEditSection(s)}>✏️</button>
+                              <button className="btn-sm danger" onClick={() => handleDeleteSection(s)}>🗑️</button>
                             </td>
                           </tr>
                         ))
@@ -879,8 +984,8 @@ const ServiceUsers = () => {
                             <td>{getSectionName(b.section)}</td>
                             <td>{b.agents || 0}</td>
                             <td className="actions-cell">
-                              <button className="btn-sm outline" onClick={() => handleEditBrigade(b.nom)}>✏️</button>
-                              <button className="btn-sm danger" onClick={() => handleDeleteBrigade(b.nom)}>🗑️</button>
+                              <button className="btn-sm outline" onClick={() => handleEditBrigade(b)}>✏️</button>
+                              <button className="btn-sm danger" onClick={() => handleDeleteBrigade(b)}>🗑️</button>
                             </td>
                           </tr>
                         ))

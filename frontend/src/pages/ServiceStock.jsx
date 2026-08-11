@@ -62,6 +62,12 @@ export function ServiceStockError() {
 const ServiceStock = () => {
   const { user, materiels, stock, brigades } = useLoaderData();
 
+  // ─── Modal Approvisionner ───
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalSaving, setModalSaving] = useState(false);
+  const [modalError, setModalError] = useState('');
+  const [modalForm, setModalForm] = useState({ materielId: null, materielNom: '', quantite: 1, etat: 'NEUF', brigade: '' });
+
   // ─── Calculer le stock par état ───
   const stockParEtat = stock.reduce((acc, item) => {
     acc[item.etat] = (acc[item.etat] || 0) + item.quantite;
@@ -92,42 +98,72 @@ const ServiceStock = () => {
       .reduce((acc, s) => acc + s.quantite, 0);
   };
 
+  // Retrouve le(s) nom(s) de brigade réellement concernée(s) par le stock bas d'un matériel
+  // (les lignes de "stock" sont censées porter un champ brigade — cf. backend à confirmer)
+  const getBrigadesConcernees = (materielId) => {
+    const brigadeIds = [...new Set(
+      stock.filter(s => s.materiel === materielId && s.brigade != null).map(s => s.brigade)
+    )];
+    if (brigadeIds.length === 0) return 'Toutes brigades';
+    return brigadeIds
+      .map(id => brigades.find(b => b.id === id)?.nom || `#${id}`)
+      .join(', ');
+  };
+
   const alertes = materiels
     .map(m => {
       const total = getStockTotal(m.id);
       const seuil = m.seuil_alerte || 5;
-      return { ...m, total, seuil };
+      return { ...m, total, seuil, brigadeNom: getBrigadesConcernees(m.id) };
     })
-    .filter(m => m.total < m.seuil && m.total > 0) // uniquement ceux qui sont bas mais non nuls
+    .filter(m => m.total < m.seuil) // stock bas, y compris les ruptures totales (total === 0)
     .sort((a, b) => a.total - b.total);
 
   // ─── Gérer l'approvisionnement ───
-  const handleApprovisionner = async (materielId, nom) => {
-    // On propose une quantité et un état (par défaut NEUF)
-    const quantite = parseInt(prompt(`Quantité à approvisionner pour "${nom}" :`, '1'));
-    if (!quantite || quantite <= 0) return;
-    const etat = prompt(`État (NEUF, BON, MOYEN, MAUVAIS, HORS_SERVICE) :`, 'NEUF') || 'NEUF';
-    if (!['NEUF', 'BON', 'MOYEN', 'MAUVAIS', 'HORS_SERVICE'].includes(etat.toUpperCase())) {
-      alert('État invalide. Utilisez NEUF, BON, MOYEN, MAUVAIS ou HORS_SERVICE.');
+  const openApproModal = (materielId, nom) => {
+    setModalError('');
+    setModalForm({
+      materielId,
+      materielNom: nom,
+      quantite: 1,
+      etat: 'NEUF',
+      brigade: user?.role === 'ADMIN' ? '' : (user?.brigade || ''),
+    });
+    setModalOpen(true);
+  };
+
+  const closeModal = () => {
+    if (modalSaving) return;
+    setModalOpen(false);
+  };
+
+  const handleApproSubmit = async (e) => {
+    e.preventDefault();
+    const quantite = parseInt(modalForm.quantite);
+    if (!quantite || quantite <= 0) {
+      setModalError('La quantité doit être un nombre positif.');
       return;
     }
+    setModalSaving(true);
+    setModalError('');
 
     try {
-      // Créer un mouvement d'approvisionnement
       await api.post('/materiaux/mouvements/', {
         type: 'APPROVISIONNEMENT',
-        materiel: materielId,
-        quantite: quantite,
+        materiel: modalForm.materielId,
+        quantite,
+        etat: modalForm.etat,
         date_mouvement: new Date().toISOString().split('T')[0],
-        brigade: user.brigade?.id || null, // ou bien on demande la brigade ?
-        commentaire: `Approvisionnement de ${quantite} ${nom} en état ${etat.toUpperCase()}`,
+        brigade: modalForm.brigade ? parseInt(modalForm.brigade) : null,
+        commentaire: `Approvisionnement de ${quantite} ${modalForm.materielNom} en état ${modalForm.etat}`,
       });
-      alert(`✅ ${quantite} ${nom} approvisionné(s) avec succès en état ${etat.toUpperCase()} !`);
-      // Pour rafraîchir, on pourrait recharger le loader, mais on va simplement recharger la page pour simplifier
+      setModalOpen(false);
       window.location.reload();
     } catch (err) {
-      console.error(err);
-      alert('❌ Erreur lors de l\'approvisionnement.');
+      const msg = err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de l\'approvisionnement.';
+      setModalError(msg);
+    } finally {
+      setModalSaving(false);
     }
   };
 
@@ -452,6 +488,80 @@ const ServiceStock = () => {
         @media (max-width: 480px) {
           .stock-grid { grid-template-columns: 1fr; }
         }
+
+        /* ─── Modal ─── */
+        .modal-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(15, 23, 42, 0.45);
+          backdrop-filter: blur(2px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+          padding: 16px;
+        }
+        .modal-card {
+          background: #ffffff;
+          border-radius: 16px;
+          width: 100%;
+          max-width: 480px;
+          max-height: 90vh;
+          overflow-y: auto;
+          box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+        }
+        .modal-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 18px 22px;
+          border-bottom: 1px solid #e2e8f0;
+        }
+        .modal-header h3 { font-size: 1rem; font-weight: 700; color: #0f172a; margin: 0; }
+        .modal-close {
+          background: none;
+          border: none;
+          font-size: 1.2rem;
+          color: #64748b;
+          cursor: pointer;
+          line-height: 1;
+          padding: 4px;
+        }
+        .modal-close:hover { color: #0f172a; }
+        .modal-body { padding: 20px 22px; }
+        .modal-field { margin-bottom: 14px; }
+        .modal-field label { display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 6px; }
+        .modal-field input,
+        .modal-field select {
+          width: 100%;
+          padding: 9px 12px;
+          border: 1px solid #cbd5e1;
+          border-radius: 8px;
+          font-size: 0.9rem;
+          box-sizing: border-box;
+        }
+        .modal-error {
+          background: #fef2f2;
+          color: #b91c1c;
+          border: 1px solid #fecaca;
+          border-radius: 8px;
+          padding: 8px 12px;
+          font-size: 0.82rem;
+          margin-bottom: 14px;
+        }
+        .modal-footer {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          padding: 16px 22px;
+          border-top: 1px solid #e2e8f0;
+        }
+        .modal-footer button { padding: 9px 18px; border-radius: 8px; font-size: 0.85rem; font-weight: 600; cursor: pointer; border: none; }
+        .modal-footer .btn-cancel { background: #f1f5f9; color: #334155; }
+        .modal-footer .btn-cancel:hover { background: #e2e8f0; }
+        .modal-footer .btn-save { background: #2563eb; color: #fff; }
+        .modal-footer .btn-save:hover { background: #1d4ed8; }
+        .modal-footer .btn-save:disabled { opacity: 0.6; cursor: not-allowed; }
       `}</style>
 
       <div className="stock-body">
@@ -470,7 +580,7 @@ const ServiceStock = () => {
                 <div className="avatar">{user?.nom ? user.nom[0] : 'AD'}</div>
                 <div>
                   <div className="name">{user?.nom || 'Admin'}</div>
-                  <div className="role">Chef Service</div>
+                  <div className="role">{user?.role || '—'}</div>
                 </div>
               </div>
             </div>
@@ -509,11 +619,11 @@ const ServiceStock = () => {
                           <td><strong>{m.nom}</strong></td>
                           <td>{m.total}</td>
                           <td>{m.seuil}</td>
-                          <td>{user?.brigade?.nom || 'N/A'}</td>
+                          <td>{m.brigadeNom}</td>
                           <td>
                             <button
                               className="btn-sm primary"
-                              onClick={() => handleApprovisionner(m.id, m.nom)}
+                              onClick={() => openApproModal(m.id, m.nom)}
                             >
                               Approvisionner
                             </button>
@@ -529,6 +639,68 @@ const ServiceStock = () => {
           </main>
         </div>
       </div>
+
+      {modalOpen && (
+        <div className="modal-overlay" onClick={closeModal}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>📦 Approvisionner "{modalForm.materielNom}"</h3>
+              <button className="modal-close" onClick={closeModal}>✕</button>
+            </div>
+            <form onSubmit={handleApproSubmit}>
+              <div className="modal-body">
+                {modalError && <div className="modal-error">{modalError}</div>}
+                <div className="modal-field">
+                  <label htmlFor="modal-quantite">Quantité *</label>
+                  <input
+                    id="modal-quantite"
+                    type="number"
+                    min="1"
+                    value={modalForm.quantite}
+                    onChange={(e) => setModalForm({ ...modalForm, quantite: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="modal-field">
+                  <label htmlFor="modal-etat">État *</label>
+                  <select
+                    id="modal-etat"
+                    value={modalForm.etat}
+                    onChange={(e) => setModalForm({ ...modalForm, etat: e.target.value })}
+                  >
+                    <option value="NEUF">NEUF</option>
+                    <option value="BON">BON</option>
+                    <option value="MOYEN">MOYEN</option>
+                    <option value="MAUVAIS">MAUVAIS</option>
+                    <option value="HORS_SERVICE">HORS_SERVICE</option>
+                  </select>
+                </div>
+                {user?.role === 'ADMIN' && (
+                  <div className="modal-field">
+                    <label htmlFor="modal-brigade">Brigade destinataire</label>
+                    <select
+                      id="modal-brigade"
+                      value={modalForm.brigade}
+                      onChange={(e) => setModalForm({ ...modalForm, brigade: e.target.value })}
+                    >
+                      <option value="">Dépôt central</option>
+                      {brigades.map(b => (
+                        <option key={b.id} value={b.id}>{b.nom}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn-cancel" onClick={closeModal}>Annuler</button>
+                <button type="submit" className="btn-save" disabled={modalSaving}>
+                  {modalSaving ? 'Enregistrement...' : 'Approvisionner'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   );
 };

@@ -64,6 +64,13 @@ const ServiceMateriels = () => {
   const [etat, setEtat] = useState('');
   const [filteredMateriels, setFilteredMateriels] = useState(initialMateriels);
 
+  // ─── Modal Ajouter / Modifier un matériel ───
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState('add'); // 'add' | 'edit'
+  const [modalSaving, setModalSaving] = useState(false);
+  const [modalError, setModalError] = useState('');
+  const [modalForm, setModalForm] = useState({ id: null, nom: '', categorie: '', seuil_alerte: 5, description: '' });
+
   // Appliquer les filtres
   useEffect(() => {
     let result = materiels;
@@ -79,8 +86,12 @@ const ServiceMateriels = () => {
       result = result.filter(m => m.categorie === categorie);
     }
 
+    if (etat) {
+      result = result.filter(m => getEtatPrincipal(m.id) === etat);
+    }
+
     setFilteredMateriels(result);
-  }, [searchTerm, categorie, materiels]);
+  }, [searchTerm, categorie, etat, materiels]);
 
   // Obtenir la quantité totale d'un matériel
   const getQuantiteTotale = (materielId) => {
@@ -117,52 +128,61 @@ const ServiceMateriels = () => {
     setEtat('');
   };
 
-  const handleAdd = async () => {
-    const nom = prompt('Nom du matériel:');
-    if (!nom) return;
-    const categorie = prompt('Catégorie:');
-    if (!categorie) return;
-    const seuil = parseInt(prompt('Seuil d\'alerte (nombre):') || '5');
-
-    try {
-      const { data } = await api.post('/materiaux/materiels/', {
-        nom,
-        categorie,
-        seuil_alerte: seuil
-      });
-      setMateriels([...materiels, data]);
-      setFilteredMateriels([...filteredMateriels, data]);
-      alert('✅ Matériel ajouté avec succès !');
-    } catch (err) {
-      alert('❌ Erreur lors de l\'ajout');
-      console.error(err);
-    }
+  const openAddModal = () => {
+    setModalMode('add');
+    setModalError('');
+    setModalForm({ id: null, nom: '', categorie: '', seuil_alerte: 5, description: '' });
+    setModalOpen(true);
   };
 
-  const handleEdit = async (id, nom) => {
-    const newNom = prompt('Nouveau nom:', nom);
-    if (!newNom) return;
-    
+  const openEditModal = (m) => {
+    setModalMode('edit');
+    setModalError('');
+    setModalForm({
+      id: m.id,
+      nom: m.nom,
+      categorie: m.categorie,
+      seuil_alerte: m.seuil_alerte ?? 5,
+      description: m.description || '',
+    });
+    setModalOpen(true);
+  };
+
+  const closeModal = () => {
+    if (modalSaving) return;
+    setModalOpen(false);
+  };
+
+  const handleModalSubmit = async (e) => {
+    e.preventDefault();
+    if (!modalForm.nom.trim() || !modalForm.categorie.trim()) {
+      setModalError('Le nom et la catégorie sont obligatoires.');
+      return;
+    }
+    setModalSaving(true);
+    setModalError('');
+
+    const payload = {
+      nom: modalForm.nom.trim(),
+      categorie: modalForm.categorie.trim(),
+      seuil_alerte: parseInt(modalForm.seuil_alerte) || 5,
+      description: modalForm.description.trim(),
+    };
+
     try {
-      const { data } = await api.patch(`/materiaux/materiels/${id}/`, {
-        nom: newNom
-      });
-      const updated = materiels.map(m => m.id === id ? data : m);
-      setMateriels(updated);
-      setFilteredMateriels(updated.filter(m => {
-        let result = true;
-        if (searchTerm.trim()) {
-          result = m.nom.toLowerCase().includes(searchTerm.toLowerCase());
-        }
-        if (categorie) {
-          result = result && m.categorie === categorie;
-        }
-        return result;
-      }));
-      alert('✅ Matériel modifié avec succès !');
+      if (modalMode === 'add') {
+        const { data } = await api.post('/materiaux/materiels/', payload);
+        setMateriels(prev => [...prev, data]);
+      } else {
+        const { data } = await api.patch(`/materiaux/materiels/${modalForm.id}/`, payload);
+        setMateriels(prev => prev.map(m => m.id === modalForm.id ? data : m));
+      }
+      setModalOpen(false);
     } catch (err) {
-      alert('❌ Erreur lors de la modification');
-      console.error(err);
+      const msg = err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de l\'enregistrement.';
+      setModalError(msg);
+    } finally {
+      setModalSaving(false);
     }
   };
 
@@ -521,6 +541,82 @@ const ServiceMateriels = () => {
           .main { max-width: 100%; padding: 16px; margin-left: 0; }
           .page-header { flex-direction: column; align-items: flex-start; gap: 12px; }
         }
+
+        /* ─── Modal ─── */
+        .modal-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(15, 23, 42, 0.45);
+          backdrop-filter: blur(2px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+          padding: 16px;
+        }
+        .modal-card {
+          background: #ffffff;
+          border-radius: 16px;
+          width: 100%;
+          max-width: 480px;
+          max-height: 90vh;
+          overflow-y: auto;
+          box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+        }
+        .modal-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 18px 22px;
+          border-bottom: 1px solid #e2e8f0;
+        }
+        .modal-header h3 { font-size: 1rem; font-weight: 700; color: #0f172a; margin: 0; }
+        .modal-close {
+          background: none;
+          border: none;
+          font-size: 1.2rem;
+          color: #64748b;
+          cursor: pointer;
+          line-height: 1;
+          padding: 4px;
+        }
+        .modal-close:hover { color: #0f172a; }
+        .modal-body { padding: 20px 22px; }
+        .modal-field { margin-bottom: 14px; }
+        .modal-field label { display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 6px; }
+        .modal-field input,
+        .modal-field select,
+        .modal-field textarea {
+          width: 100%;
+          padding: 9px 12px;
+          border: 1px solid #cbd5e1;
+          border-radius: 8px;
+          font-size: 0.9rem;
+          box-sizing: border-box;
+        }
+        .modal-field textarea { resize: vertical; min-height: 70px; }
+        .modal-error {
+          background: #fef2f2;
+          color: #b91c1c;
+          border: 1px solid #fecaca;
+          border-radius: 8px;
+          padding: 8px 12px;
+          font-size: 0.82rem;
+          margin-bottom: 14px;
+        }
+        .modal-footer {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          padding: 16px 22px;
+          border-top: 1px solid #e2e8f0;
+        }
+        .modal-footer button { padding: 9px 18px; border-radius: 8px; font-size: 0.85rem; font-weight: 600; cursor: pointer; border: none; }
+        .modal-footer .btn-cancel { background: #f1f5f9; color: #334155; }
+        .modal-footer .btn-cancel:hover { background: #e2e8f0; }
+        .modal-footer .btn-save { background: #2563eb; color: #fff; }
+        .modal-footer .btn-save:hover { background: #1d4ed8; }
+        .modal-footer .btn-save:disabled { opacity: 0.6; cursor: not-allowed; }
       `}</style>
 
       <div className="materiels-body">
@@ -539,7 +635,7 @@ const ServiceMateriels = () => {
                 <div className="avatar">{user?.nom ? user.nom[0] : 'AD'}</div>
                 <div>
                   <div className="name">{user?.nom || 'Admin'}</div>
-                  <div className="role">Chef Service</div>
+                  <div className="role">{user?.role || '—'}</div>
                 </div>
               </div>
             </div>
@@ -576,7 +672,7 @@ const ServiceMateriels = () => {
               <button
                 className="btn-sm success"
                 style={{ padding: '8px 20px', marginLeft: 'auto' }}
-                onClick={handleAdd}
+                onClick={openAddModal}
               >
                 + Ajouter un matériel
               </button>
@@ -626,7 +722,7 @@ const ServiceMateriels = () => {
                             <td className="actions-cell">
                               <button 
                                 className="btn-sm outline" 
-                                onClick={() => handleEdit(m.id, m.nom)}
+                                onClick={() => openEditModal(m)}
                               >
                                 ✏️
                               </button>
@@ -649,6 +745,66 @@ const ServiceMateriels = () => {
           </main>
         </div>
       </div>
+
+      {modalOpen && (
+        <div className="modal-overlay" onClick={closeModal}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>{modalMode === 'add' ? '➕ Nouveau matériel' : '✏️ Modifier le matériel'}</h3>
+              <button className="modal-close" onClick={closeModal}>✕</button>
+            </div>
+            <form onSubmit={handleModalSubmit}>
+              <div className="modal-body">
+                {modalError && <div className="modal-error">{modalError}</div>}
+                <div className="modal-field">
+                  <label htmlFor="modal-nom">Nom *</label>
+                  <input
+                    id="modal-nom"
+                    type="text"
+                    value={modalForm.nom}
+                    onChange={(e) => setModalForm({ ...modalForm, nom: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="modal-field">
+                  <label htmlFor="modal-categorie">Catégorie *</label>
+                  <input
+                    id="modal-categorie"
+                    type="text"
+                    value={modalForm.categorie}
+                    onChange={(e) => setModalForm({ ...modalForm, categorie: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="modal-field">
+                  <label htmlFor="modal-seuil">Seuil d'alerte</label>
+                  <input
+                    id="modal-seuil"
+                    type="number"
+                    min="0"
+                    value={modalForm.seuil_alerte}
+                    onChange={(e) => setModalForm({ ...modalForm, seuil_alerte: e.target.value })}
+                  />
+                </div>
+                <div className="modal-field">
+                  <label htmlFor="modal-description">Description (optionnel)</label>
+                  <textarea
+                    id="modal-description"
+                    value={modalForm.description}
+                    onChange={(e) => setModalForm({ ...modalForm, description: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn-cancel" onClick={closeModal}>Annuler</button>
+                <button type="submit" className="btn-save" disabled={modalSaving}>
+                  {modalSaving ? 'Enregistrement...' : (modalMode === 'add' ? 'Ajouter' : 'Enregistrer')}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   );
 };

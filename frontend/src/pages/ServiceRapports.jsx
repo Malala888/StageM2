@@ -130,17 +130,124 @@ const ServiceRapports = () => {
   const [periode, setPeriode] = useState('');
   const [brigade, setBrigade] = useState('');
 
-  // États pour les statistiques filtrées (pour une démo, on va juste afficher les données globales)
-  // On pourrait filtrer les mouvements selon la période et la brigade, mais pour l'instant on garde les valeurs réelles.
+  // ─── Mouvements filtrés selon la période et la brigade choisies ───
+  const getDateLimite = (p) => {
+    const now = new Date();
+    if (p === 'mois') return new Date(now.getFullYear(), now.getMonth(), 1);
+    if (p === 'trimestre') return new Date(now.getFullYear(), now.getMonth() - 2, 1);
+    if (p === 'annee') return new Date(now.getFullYear(), 0, 1);
+    return null;
+  };
+
+  const mouvementsFiltres = mouvements.filter(m => {
+    if (brigade && m.brigade !== parseInt(brigade)) return false;
+    if (periode) {
+      const limite = getDateLimite(periode);
+      if (limite && new Date(m.date_mouvement) < limite) return false;
+    }
+    return true;
+  });
+
+  // ─── Statistiques recalculées à partir des mouvements filtrés ───
+  const totalMouvementsF = mouvementsFiltres.length;
+  const empruntsEnCoursF = mouvementsFiltres.filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS').length;
+  const retardsF = mouvementsFiltres.filter(m => m.statut === 'EN_RETARD').length;
+
+  const statsParBrigadeF = brigades
+    .filter(b => !brigade || b.id === parseInt(brigade))
+    .map(b => ({ ...b, count: mouvementsFiltres.filter(m => m.brigade === b.id).length }))
+    .sort((a, b2) => b2.count - a.count);
+
+  const empruntsParMaterielF = {};
+  mouvementsFiltres
+    .filter(m => m.type === 'EMPRUNT')
+    .forEach(m => {
+      const id = m.materiel;
+      empruntsParMaterielF[id] = (empruntsParMaterielF[id] || 0) + m.quantite;
+    });
+  const topMaterielsF = Object.entries(empruntsParMaterielF)
+    .map(([id, qte]) => ({ id: parseInt(id), qte }))
+    .sort((a, b2) => b2.qte - a.qte)
+    .slice(0, 5)
+    .map(item => {
+      const m = materiels.find(mat => mat.id === item.id);
+      return m ? { nom: m.nom, qte: item.qte } : null;
+    })
+    .filter(Boolean);
+
+  // Le stock n'a pas de date : le filtre "période" ne s'y applique pas.
+  // On filtre par brigade seulement si les lignes de stock portent bien un champ brigade.
+  const stockFiltre = brigade ? stock.filter(s => s.brigade == null || s.brigade === parseInt(brigade)) : stock;
+  const materielsAbimesF = stockFiltre.filter(s => s.etat === 'MAUVAIS' || s.etat === 'HORS_SERVICE').reduce((acc, s) => acc + s.quantite, 0);
+  const stockTotalF = stockFiltre.reduce((acc, s) => acc + s.quantite, 0);
 
   // Handlers
-  const handleGenerer = () => {
-    alert(`📊 Rapport généré !\nPériode: ${periode || 'Toutes'}\nBrigade: ${brigade || 'Toutes'}`);
-    // Ici on pourrait recharger les données avec les filtres
+  const handleGenerer = (e) => {
+    e.preventDefault();
+    // Les cartes ci-dessous se recalculent déjà en direct à chaque changement
+    // de filtre (periode/brigade sont des states) — ce bouton confirme juste l'action.
+    const brigadeLabel = brigade ? (brigades.find(b => b.id === parseInt(brigade))?.nom || 'Brigade') : 'Toutes les brigades';
+    const periodeLabel = { mois: 'Ce mois', trimestre: 'Ce trimestre', annee: 'Cette année' }[periode] || 'Toutes périodes';
+    alert(`📊 Rapport mis à jour\nPériode : ${periodeLabel}\nBrigade : ${brigadeLabel}`);
   };
 
   const handleExportPDF = () => {
-    alert('📥 Export PDF en cours...');
+    const dateStr = new Date().toLocaleDateString('fr-FR');
+    const brigadeLabel = brigade ? (brigades.find(b => b.id === parseInt(brigade))?.nom || 'Brigade') : 'Toutes les brigades';
+    const periodeLabel = { mois: 'Ce mois', trimestre: 'Ce trimestre', annee: 'Cette année' }[periode] || 'Toutes périodes';
+
+    const html = `
+      <html>
+        <head>
+          <title>Rapport FCE - ${dateStr}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 30px; color: #0f172a; }
+            h1 { font-size: 20px; border-bottom: 2px solid #2563eb; padding-bottom: 8px; }
+            h2 { font-size: 15px; margin-top: 24px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+            th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
+            th { background: #f1f5f9; }
+            .meta { color: #64748b; font-size: 12px; margin-bottom: 16px; }
+          </style>
+        </head>
+        <body>
+          <h1>Rapport - Gestion du matériel FCE</h1>
+          <div class="meta">Généré le ${dateStr} — Période : ${periodeLabel} — Brigade : ${brigadeLabel}</div>
+
+          <h2>Indicateurs clés</h2>
+          <table>
+            <tr><th>Mouvements</th><td>${totalMouvementsF}</td></tr>
+            <tr><th>Emprunts en cours</th><td>${empruntsEnCoursF}</td></tr>
+            <tr><th>Retards</th><td>${retardsF}</td></tr>
+            <tr><th>Matériels abîmés</th><td>${materielsAbimesF}</td></tr>
+            <tr><th>Stock total</th><td>${stockTotalF}</td></tr>
+          </table>
+
+          <h2>Mouvements par brigade</h2>
+          <table>
+            <tr><th>Brigade</th><th>Mouvements</th></tr>
+            ${statsParBrigadeF.map(b => `<tr><td>${b.nom}</td><td>${b.count}</td></tr>`).join('')}
+          </table>
+
+          <h2>Top matériels empruntés</h2>
+          <table>
+            <tr><th>Matériel</th><th>Emprunts</th></tr>
+            ${topMaterielsF.map(m => `<tr><td>${m.nom}</td><td>${m.qte}</td></tr>`).join('')}
+          </table>
+        </body>
+      </html>
+    `;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('❌ Le navigateur a bloqué la fenêtre d\'impression. Autorisez les pop-ups pour ce site.');
+      return;
+    }
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    // On laisse le temps au navigateur de peindre le document avant d'ouvrir l'impression
+    setTimeout(() => printWindow.print(), 300);
   };
 
   const handleCardClick = (titre, detail) => {
@@ -149,21 +256,22 @@ const ServiceRapports = () => {
 
   // Fonction pour obtenir le nombre de mouvements par brigade
   const getMouvementsByBrigade = (brigadeId) => {
-    return mouvements.filter(m => m.brigade === brigadeId).length;
+    return mouvementsFiltres.filter(m => m.brigade === brigadeId).length;
   };
 
   // Fonction pour obtenir le top des matériels
   const getTopMateriels = () => {
-    return topMateriels.map((m, i) => `${i+1}. ${m.nom} (${m.qte})`).join('\n');
+    return topMaterielsF.map((m, i) => `${i+1}. ${m.nom} (${m.qte})`).join('\n');
   };
 
-  // Stats par état du stock
-  const statsParEtat = stock.reduce((acc, s) => {
+  // Stats par état du stock (filtré)
+  const statsParEtat = stockFiltre.reduce((acc, s) => {
     acc[s.etat] = (acc[s.etat] || 0) + s.quantite;
     return acc;
   }, {});
 
   const totalAbimes = (statsParEtat['MAUVAIS'] || 0) + (statsParEtat['HORS_SERVICE'] || 0);
+
 
   return (
     <>
@@ -488,7 +596,7 @@ const ServiceRapports = () => {
                 <div className="avatar">{user?.nom ? user.nom[0] : 'AD'}</div>
                 <div>
                   <div className="name">{user?.nom || 'Admin'}</div>
-                  <div className="role">Chef Service</div>
+                  <div className="role">{user?.role || '—'}</div>
                 </div>
               </div>
             </div>
@@ -521,50 +629,50 @@ const ServiceRapports = () => {
 
             {/* ─── Cartes de rapports ─── */}
             <div className="report-grid">
-              <div className="report-card" onClick={() => handleCardClick('Emprunts en cours', `${empruntsEnCours} matériels actuellement empruntés`)}>
+              <div className="report-card" onClick={() => handleCardClick('Emprunts en cours', `${empruntsEnCoursF} matériels actuellement empruntés`)}>
                 <div className="icon">📊</div>
                 <div className="title">Emprunts en cours</div>
-                <div className="desc">{empruntsEnCours} matériels actuellement empruntés</div>
-                <span className="badge yellow">{empruntsEnCours > 0 ? `+${empruntsEnCours} en cours` : 'Aucun'}</span>
+                <div className="desc">{empruntsEnCoursF} matériels actuellement empruntés</div>
+                <span className="badge yellow">{empruntsEnCoursF > 0 ? `+${empruntsEnCoursF} en cours` : 'Aucun'}</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Retards', `${retards} retards signalés`)}>
+              <div className="report-card" onClick={() => handleCardClick('Retards', `${retardsF} retards signalés`)}>
                 <div className="icon">⏰</div>
                 <div className="title">Retards</div>
-                <div className="desc">{retards} retards signalés</div>
-                <span className="badge red">{retards > 0 ? `${retards} à traiter` : '✅ Aucun'}</span>
+                <div className="desc">{retardsF} retards signalés</div>
+                <span className="badge red">{retardsF > 0 ? `${retardsF} à traiter` : '✅ Aucun'}</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Par Brigade', statsParBrigade.map(b => `${b.nom} : ${b.count}`).join(' | '))}>
+              <div className="report-card" onClick={() => handleCardClick('Par Brigade', statsParBrigadeF.map(b => `${b.nom} : ${b.count}`).join(' | '))}>
                 <div className="icon">🏢</div>
                 <div className="title">Par Brigade</div>
-                <div className="desc">{statsParBrigade.slice(0, 3).map(b => `${b.nom} : ${b.count}`).join(' | ')}</div>
+                <div className="desc">{statsParBrigadeF.slice(0, 3).map(b => `${b.nom} : ${b.count}`).join(' | ')}</div>
                 <span className="badge blue">Voir détails</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Matériels abîmés', `${materielsAbimes} en mauvais état`)}>
+              <div className="report-card" onClick={() => handleCardClick('Matériels abîmés', `${materielsAbimesF} en mauvais état`)}>
                 <div className="icon">🔧</div>
                 <div className="title">Matériels abîmés</div>
-                <div className="desc">{materielsAbimes} en mauvais état</div>
-                <span className="badge orange">{materielsAbimes > 0 ? `+${materielsAbimes} à réparer` : '✅ Bon état'}</span>
+                <div className="desc">{materielsAbimesF} en mauvais état</div>
+                <span className="badge orange">{materielsAbimesF > 0 ? `+${materielsAbimesF} à réparer` : '✅ Bon état'}</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Stock total', `${stockTotal} unités en stock`)}>
+              <div className="report-card" onClick={() => handleCardClick('Stock total', `${stockTotalF} unités en stock`)}>
                 <div className="icon">📦</div>
                 <div className="title">Stock total</div>
-                <div className="desc">{stockTotal} unités en stock</div>
-                <span className="badge green">{stockTotal > 0 ? `${stockTotal} disponibles` : 'Stock vide'}</span>
+                <div className="desc">{stockTotalF} unités en stock</div>
+                <span className="badge green">{stockTotalF > 0 ? `${stockTotalF} disponibles` : 'Stock vide'}</span>
               </div>
-              <div className="report-card" onClick={() => handleCardClick('Mouvements', `${totalMouvements} opérations ce mois`)}>
+              <div className="report-card" onClick={() => handleCardClick('Mouvements', `${totalMouvementsF} opérations ce mois`)}>
                 <div className="icon">🔄</div>
                 <div className="title">Mouvements</div>
-                <div className="desc">{totalMouvements} opérations au total</div>
-                <span className="badge blue">{totalMouvements > 0 ? `+${totalMouvements} enregistrés` : 'Aucun'}</span>
+                <div className="desc">{totalMouvementsF} opérations au total</div>
+                <span className="badge blue">{totalMouvementsF > 0 ? `+${totalMouvementsF} enregistrés` : 'Aucun'}</span>
               </div>
             </div>
 
             {/* ─── Détails supplémentaires ─── */}
             <div className="card">
               <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '14px' }}>📋 Top 5 des matériels les plus empruntés</h3>
-              {topMateriels.length > 0 ? (
+              {topMaterielsF.length > 0 ? (
                 <ul style={{ listStyle: 'none', padding: 0 }}>
-                  {topMateriels.map((m, i) => (
+                  {topMaterielsF.map((m, i) => (
                     <li key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f1f5f9' }}>
                       <span><strong>{i+1}.</strong> {m.nom}</span>
                       <span className="badge blue">{m.qte} emprunts</span>

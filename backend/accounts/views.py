@@ -82,8 +82,42 @@ class UtilisateurViewSet(viewsets.ModelViewSet):
             permission_classes = [IsAuthenticated]
         return [permission() for permission in permission_classes]
 
+    # ─── Restreint la liste au périmètre du rôle connecté ───
+    # Chef Service : tout | Chef Section : sa section | Chef Brigade : sa brigade | GL/CN : lui-même
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.action != 'list':
+            # retrieve/update/destroy restent gérés par IsSelfOrHierarchyOrAdmin (object-level)
+            return qs
+
+        user = self.request.user
+        if not user.is_authenticated:
+            return qs.none()
+        if user.is_superuser or user.role == 'ADMIN':
+            return qs
+        if user.role == 'CHEF_SECTION':
+            return qs.filter(section=user.section) if user.section else qs.none()
+        if user.role == 'CHEF_BRIGADE':
+            user_brigade = self._get_user_brigade(user)
+            return qs.filter(brigade=user_brigade) if user_brigade else qs.none()
+        # GL / CN : périmètre = lui-même uniquement
+        return qs.filter(id=user.id)
+
     def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
+        data = request.data.copy()
+
+        # Un seul chemin de création de compte : l'auto-inscription publique
+        # (Register.jsx). On ne fait confiance à aucune donnée sensible envoyée
+        # par le client : le rôle ADMIN est interdit et le statut est toujours
+        # forcé à EN_ATTENTE, quoi que le client tente d'envoyer.
+        if data.get('role') not in ['CHEF_SECTION', 'CHEF_BRIGADE', 'GL', 'CN']:
+            return Response(
+                {'error': "Rôle non autorisé pour l'inscription"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        data['statut'] = 'EN_ATTENTE'
+
+        serializer = self.get_serializer(data=data)
         if not serializer.is_valid():
             print("❌ Erreurs de validation :", serializer.errors)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
