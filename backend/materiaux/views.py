@@ -14,7 +14,9 @@ from personnel.models import Brigade
 # Permissions par rôle (cf. tableau des rôles du cahier des charges)
 # ============================================================
 class IsAdminForWrite(permissions.BasePermission):
-    """Lecture pour tous les connectés, écriture réservée au Chef de Service (ADMIN)."""
+    """Lecture pour tous les connectés, écriture réservée au Chef de Service (ADMIN).
+    Utilisé pour Stock : les écritures normales passent par les mouvements, pas
+    par une modification manuelle directe, pour garder une traçabilité complète."""
     def has_permission(self, request, view):
         if request.method in permissions.SAFE_METHODS:
             return True
@@ -22,11 +24,20 @@ class IsAdminForWrite(permissions.BasePermission):
         return bool(user and user.is_authenticated and (user.is_superuser or user.role == 'ADMIN'))
 
 
+class IsAdminOrChefSectionForWrite(permissions.BasePermission):
+    """Lecture pour tous les connectés, écriture réservée à ADMIN et Chef de Section."""
+    def has_permission(self, request, view):
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        user = request.user
+        return bool(user and user.is_authenticated and (user.is_superuser or user.role in ['ADMIN', 'CHEF_SECTION']))
+
+
 class CanRegisterMouvement(permissions.BasePermission):
     """
     Lecture pour tous les connectés (queryset déjà scopé par rôle dans get_queryset).
-    Écriture (créer un mouvement) réservée à ADMIN et CHEF_BRIGADE, conformément au
-    cahier : "Chef de Brigade : crée du personnel, enregistre des mouvements".
+    Écriture (créer un mouvement) réservée à ADMIN, CHEF_SECTION et CHEF_BRIGADE
+    (le Chef de Section a aussi ce pouvoir sur sa section — cf. SectionMouvements.jsx).
     """
     def has_permission(self, request, view):
         if request.method in permissions.SAFE_METHODS:
@@ -34,7 +45,7 @@ class CanRegisterMouvement(permissions.BasePermission):
         user = request.user
         if not (user and user.is_authenticated):
             return False
-        return user.is_superuser or user.role in ['ADMIN', 'CHEF_BRIGADE']
+        return user.is_superuser or user.role in ['ADMIN', 'CHEF_SECTION', 'CHEF_BRIGADE']
 
     def has_object_permission(self, request, view, obj):
         if request.method in permissions.SAFE_METHODS:
@@ -42,6 +53,8 @@ class CanRegisterMouvement(permissions.BasePermission):
         user = request.user
         if user.is_superuser or user.role == 'ADMIN':
             return True
+        if user.role == 'CHEF_SECTION':
+            return bool(user.section) and obj.brigade_id is not None and obj.brigade.section_id == user.section_id
         # Un Chef de Brigade ne modifie/supprime que ses propres mouvements,
         # ou ceux rattachés à sa brigade
         if user.role == 'CHEF_BRIGADE':
@@ -58,7 +71,7 @@ class CanRegisterMouvement(permissions.BasePermission):
 class MaterielViewSet(viewsets.ModelViewSet):
     queryset = Materiel.objects.all()
     serializer_class = MaterielSerializer
-    permission_classes = [IsAuthenticated, IsAdminForWrite]
+    permission_classes = [IsAuthenticated, IsAdminOrChefSectionForWrite]
 
 
 # ============================================================
@@ -210,8 +223,10 @@ class MouvementMaterielViewSet(viewsets.ModelViewSet):
         # Le numéro est toujours généré côté serveur, jamais fourni par le client
         data['numero'] = self._generate_numero()
 
-        # Un Chef de Brigade ne peut enregistrer un mouvement que pour sa propre brigade
-        if not (user.is_superuser or user.role == 'ADMIN'):
+        # Un Chef de Brigade ne peut enregistrer un mouvement que pour sa propre brigade.
+        # Un Chef de Section peut choisir n'importe quelle brigade de sa section,
+        # mais pas en dehors.
+        if user.role == 'CHEF_BRIGADE' and not user.is_superuser:
             user_brigade = self._get_user_brigade(user)
             if not user_brigade:
                 return Response(
@@ -219,6 +234,18 @@ class MouvementMaterielViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_403_FORBIDDEN
                 )
             data['brigade'] = user_brigade.id
+        elif user.role == 'CHEF_SECTION' and not user.is_superuser:
+            if not user.section:
+                return Response(
+                    {'error': "Aucune section n'est associée à votre compte"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            brigade_id = data.get('brigade')
+            if not brigade_id or not Brigade.objects.filter(id=brigade_id, section_id=user.section_id).exists():
+                return Response(
+                    {'error': "La brigade choisie doit appartenir à votre section"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
         movement_type = data.get('type')
         if movement_type in ['APPROVISIONNEMENT', 'TRANSFERT', 'REBUT', 'INVENTAIRE'] and not data.get('etat'):

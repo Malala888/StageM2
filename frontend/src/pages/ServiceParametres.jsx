@@ -52,11 +52,13 @@ export function ServiceParametresError() {
 const ServiceParametres = () => {
   const { user: initialUser } = useLoaderData();
 
+  // ─── État utilisateur (plutôt que de muter l'objet du loader) ───
+  const [user, setUser] = useState(initialUser);
+
   // ─── États du formulaire ───
   const [nom, setNom] = useState(initialUser?.nom || '');
   const [prenom, setPrenom] = useState(initialUser?.prenom || '');
   const [email, setEmail] = useState(initialUser?.email || '');
-  const [telephone, setTelephone] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -64,50 +66,62 @@ const ServiceParametres = () => {
   const [updateError, setUpdateError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // ─── Extraire un message d'erreur lisible depuis une réponse DRF ───
+  // Le backend renvoie soit { error: '...' } (actions custom), soit un objet
+  // de validation par champ ({ email: ['...'] }) pour un PATCH classique.
+  const extractError = (err, fallback) => {
+    const data = err.response?.data;
+    if (!data) return fallback;
+    if (typeof data === 'string') return data;
+    if (data.error) return data.error;
+    if (data.detail) return data.detail;
+    const fieldErrors = Object.entries(data)
+      .map(([field, msgs]) => `${field} : ${Array.isArray(msgs) ? msgs.join(', ') : msgs}`)
+      .join(' — ');
+    return fieldErrors || fallback;
+  };
+
   // ─── Handlers ───
   const handleSubmit = async (e) => {
     e.preventDefault();
     setUpdateError('');
     setUpdateSuccess('');
-    setIsSubmitting(true);
 
-    // Vérifier que les mots de passe correspondent si un nouveau mot de passe est saisi
+    // Vérifications avant l'envoi
+    if (newPassword && !currentPassword) {
+      setUpdateError('Indiquez votre mot de passe actuel pour pouvoir le changer.');
+      return;
+    }
+    if (newPassword && newPassword.length < 8) {
+      setUpdateError('Le nouveau mot de passe doit contenir au moins 8 caractères.');
+      return;
+    }
     if (newPassword && newPassword !== confirmPassword) {
-      setUpdateError('Les mots de passe ne correspondent pas');
-      setIsSubmitting(false);
+      setUpdateError('Les mots de passe ne correspondent pas.');
       return;
     }
 
+    setIsSubmitting(true);
     try {
       // 1. Mettre à jour le profil (nom, prénom, email)
-      const payload = { nom, prenom, email };
-      await api.patch(`/accounts/users/${initialUser.id}/`, payload);
+      const { data: updatedUser } = await api.patch(`/accounts/users/${user.id}/`, { nom, prenom, email });
+      setUser(updatedUser);
 
       // 2. Changer le mot de passe si demandé
       if (newPassword && currentPassword) {
-        // Endpoint à créer sur le backend si ce n'est pas déjà fait
-        // On suppose qu'il existe un endpoint /api/accounts/change-password/
         await api.post('/accounts/change-password/', {
           old_password: currentPassword,
           new_password: newPassword,
         });
-        // Réinitialiser les champs de mot de passe
         setCurrentPassword('');
         setNewPassword('');
         setConfirmPassword('');
       }
 
       setUpdateSuccess('✅ Profil mis à jour avec succès !');
-
-      // Mettre à jour l'utilisateur dans le cache local
-      initialUser.nom = nom;
-      initialUser.prenom = prenom;
-      initialUser.email = email;
-
     } catch (err) {
       console.error(err);
-      const msg = err.response?.data?.detail || err.response?.data?.message || 'Erreur lors de la mise à jour du profil';
-      setUpdateError(`❌ ${msg}`);
+      setUpdateError(`❌ ${extractError(err, 'Erreur lors de la mise à jour du profil')}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -448,10 +462,10 @@ const ServiceParametres = () => {
                 <div className="sub">Modifiez vos informations personnelles</div>
               </div>
               <div className="user-badge">
-                <div className="avatar">{initialUser?.nom ? initialUser.nom[0] : 'AD'}</div>
+                <div className="avatar">{user?.nom ? user.nom[0] : '—'}</div>
                 <div>
-                  <div className="name">{initialUser?.nom || 'Admin'}</div>
-                  <div className="role">{initialUser?.role || 'Chef Service'}</div>
+                  <div className="name">{user?.nom || '—'}</div>
+                  <div className="role">{user?.role || '—'}</div>
                 </div>
               </div>
             </div>
@@ -495,24 +509,14 @@ const ServiceParametres = () => {
                     />
                     <span className="help">L'email vous sert d'identifiant pour la connexion.</span>
                   </div>
-                  <div className="field">
-                    <label htmlFor="telephone">Téléphone</label>
-                    <input
-                      type="text"
-                      id="telephone"
-                      value={telephone}
-                      onChange={(e) => setTelephone(e.target.value)}
-                      placeholder="+261 XX XXX XX XX"
-                    />
-                  </div>
                   <div className="field full">
                     <label htmlFor="role">Rôle</label>
-                    <input type="text" id="role" value={initialUser?.role || 'ADMIN'} disabled />
+                    <input type="text" id="role" value={user?.role || '—'} disabled />
                     <span className="help">Le rôle ne peut pas être modifié ici.</span>
                   </div>
                   <div className="field full">
                     <label htmlFor="statut">Statut du compte</label>
-                    <input type="text" id="statut" value={initialUser?.statut || 'ACTIF'} disabled />
+                    <input type="text" id="statut" value={user?.statut || '—'} disabled />
                   </div>
 
                   {/* ─── Changement de mot de passe ─── */}

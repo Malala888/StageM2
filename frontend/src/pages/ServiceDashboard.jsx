@@ -17,18 +17,20 @@ async function fetchDashboardData() {
     return dashboardCache;
   }
 
-  // Les 4 appels ne dépendent pas les uns des autres : on les lance
+  // Les 5 appels ne dépendent pas les uns des autres : on les lance
   // en parallèle plutôt que d'attendre chacun l'un après l'autre.
   const [
     { data: userData },
     { data: users },
     { data: stockData },
     { data: mouvements },
+    { data: brigades },
   ] = await Promise.all([
     api.get('/accounts/users/me/'),
     api.get('/accounts/users/'),
     api.get('/materiaux/stock/'),
     api.get('/materiaux/mouvements/'),
+    api.get('/personnel/brigades/'),
   ]);
 
   const actifs = users.filter(u => u.statut === 'ACTIF');
@@ -41,14 +43,15 @@ async function fetchDashboardData() {
   const activitesList = derniers.map((m, index) => ({
     id: m.id || index,
     type: m.type,
-    materiel: m.materiel ? m.materiel.nom : 'Matériel',
-    agent: m.agent_concerner ? `${m.agent_concerner.nom} ${m.agent_concerner.prenom}` : 'Système',
+    materiel: m.materiel_nom || 'Matériel',
+    agent: m.agent_concerner_nom || 'Système',
     date: new Date(m.date_mouvement).toLocaleDateString('fr-FR'),
     statut: m.statut,
   }));
 
   const result = {
     user: userData,
+    brigades,
     stats: {
       utilisateursActifs: actifs.length,
       totalUtilisateurs: users.length,
@@ -102,7 +105,22 @@ export function ServiceDashboardError() {
 }
 
 const ServiceDashboard = () => {
-  const { user, stats, derniersMouvements, activites, comptesEnAttente } = useLoaderData();
+  const { user, stats, derniersMouvements, activites, comptesEnAttente, brigades } = useLoaderData();
+
+  const getBrigadeName = (brigadeId) => {
+    if (!brigadeId) return 'N/A';
+    return brigades.find(b => b.id === brigadeId)?.nom || 'N/A';
+  };
+
+  // ─── Personnalisation du tableau de bord selon le périmètre du rôle ───
+  // (le backend renvoie déjà des données scopées : ici on adapte juste les libellés)
+  const isGlOuCn = user?.role === 'GL' || user?.role === 'CN';
+  const peutValider = ['ADMIN', 'CHEF_SECTION', 'CHEF_BRIGADE'].includes(user?.role);
+
+  let sousTitre = 'vue globale du système';
+  if (user?.role === 'CHEF_SECTION') sousTitre = 'vue de votre section';
+  else if (user?.role === 'CHEF_BRIGADE') sousTitre = `vue de votre brigade${getBrigadeName(user?.brigade) !== 'N/A' ? ` (${getBrigadeName(user.brigade)})` : ''}`;
+  else if (isGlOuCn) sousTitre = 'votre espace personnel';
 
   return (
     <>
@@ -517,32 +535,34 @@ const ServiceDashboard = () => {
             <div className="page-header">
               <div>
                 <h1>Tableau de bord</h1>
-                <div className="sub">Bienvenue, {user?.nom || 'Admin'} {user?.prenom || ''} — vue globale du système</div>
+                <div className="sub">Bienvenue, {user?.nom || 'Admin'} {user?.prenom || ''} — {sousTitre}</div>
               </div>
               <div className="user-badge">
                 <div className="avatar">{user?.nom ? user.nom[0] : 'AD'}</div>
                 <div>
                   <div className="name">{user?.nom || 'Admin'}</div>
-                  <div className="role">Chef Service</div>
+                  <div className="role">{user?.role || '—'}</div>
                 </div>
               </div>
             </div>
 
             {/* Widgets */}
             <div className="widget-grid">
-              <div className="widget">
-                <div className="icon">
-                  <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              {!isGlOuCn && (
+                <div className="widget">
+                  <div className="icon">
+                    <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                  </div>
+                  <div className="label">Utilisateurs actifs</div>
+                  <div className="value">{stats.utilisateursActifs} <small>/ {stats.totalUtilisateurs}</small></div>
+                  <span className="change">+{stats.utilisateursActifs} actifs</span>
                 </div>
-                <div className="label">Utilisateurs actifs</div>
-                <div className="value">{stats.utilisateursActifs} <small>/ {stats.totalUtilisateurs}</small></div>
-                <span className="change">+{stats.utilisateursActifs} actifs</span>
-              </div>
+              )}
               <div className="widget">
                 <div className="icon">
                   <svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
                 </div>
-                <div className="label">Matériels en stock</div>
+                <div className="label">{isGlOuCn ? 'Matériel disponible' : 'Matériels en stock'}</div>
                 <div className="value">{stats.stockTotal}</div>
                 <span className="change">Total unités</span>
               </div>
@@ -550,7 +570,7 @@ const ServiceDashboard = () => {
                 <div className="icon">
                   <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                 </div>
-                <div className="label">En cours d'emprunt</div>
+                <div className="label">{isGlOuCn ? 'Mes emprunts en cours' : "En cours d'emprunt"}</div>
                 <div className="value">{stats.empruntsEnCours}</div>
                 <span className="change down">En cours</span>
               </div>
@@ -558,7 +578,7 @@ const ServiceDashboard = () => {
                 <div className="icon">
                   <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                 </div>
-                <div className="label">Retards signalés</div>
+                <div className="label">{isGlOuCn ? 'Mes retards' : 'Retards signalés'}</div>
                 <div className="value">{stats.retards}</div>
                 <span className="change down">À traiter</span>
               </div>
@@ -580,9 +600,9 @@ const ServiceDashboard = () => {
                       {derniersMouvements.length > 0 ? (
                         derniersMouvements.map((mvt) => (
                           <tr key={mvt.id}>
-                            <td>{mvt.materiel?.nom || 'N/A'}</td>
+                            <td>{mvt.materiel_nom || 'N/A'}</td>
                             <td>{mvt.type}</td>
-                            <td>{mvt.agent_concerner ? `${mvt.agent_concerner.nom} ${mvt.agent_concerner.prenom}` : 'Système'}</td>
+                            <td>{mvt.agent_concerner_nom || 'Système'}</td>
                             <td>
                               <span className={`badge ${mvt.statut === 'EN_COURS' ? 'yellow' : mvt.statut === 'RETOURNE' ? 'green' : mvt.statut === 'EN_RETARD' ? 'red' : 'blue'}`}>
                                 {mvt.statut}
@@ -616,65 +636,69 @@ const ServiceDashboard = () => {
               </div>
             </div>
 
-            {/* Comptes en attente */}
-            <div className="card">
-              <h3>
-                Comptes en attente de validation
-                <Link to="/users">Tout valider →</Link>
-              </h3>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr><th>Nom</th><th>Email</th><th>Poste</th><th>Brigade</th><th>Action</th></tr>
-                  </thead>
-                  <tbody>
-                    {comptesEnAttente.length > 0 ? (
-                      comptesEnAttente.map((u) => (
-                        <tr key={u.id}>
-                          <td>{u.nom} {u.prenom}</td>
-                          <td>{u.email}</td>
-                          <td>{u.role}</td>
-                          <td>{u.brigade?.nom || 'N/A'}</td>
-                          <td>
-                            <button
-                              className="btn-sm success"
-                              onClick={async () => {
-                                try {
-                                  await api.patch(`/accounts/users/${u.id}/valider/`);
-                                  alert(`✅ ${u.nom} ${u.prenom} validé`);
-                                  window.location.reload();
-                                } catch (err) {
-                                  alert('❌ Erreur lors de la validation');
-                                }
-                              }}
-                            >
-                              Valider
-                            </button>
-                            <button
-                              className="btn-sm danger"
-                              onClick={async () => {
-                                if (!confirm(`Rejeter ${u.nom} ${u.prenom} ?`)) return;
-                                try {
-                                  await api.patch(`/accounts/users/${u.id}/rejeter/`);
-                                  alert(`❌ ${u.nom} ${u.prenom} rejeté`);
-                                  window.location.reload();
-                                } catch (err) {
-                                  alert('❌ Erreur lors du rejet');
-                                }
-                              }}
-                            >
-                              Rejeter
-                            </button>
-                          </td>
-                        </tr>
-                      ))
-                    ) : (
-                      <tr><td colSpan="5">Aucun compte en attente</td></tr>
-                    )}
-                  </tbody>
-                </table>
+            {/* Comptes en attente (non pertinent pour GL/CN : ils ne valident jamais personne) */}
+            {peutValider && (
+              <div className="card">
+                <h3>
+                  Comptes en attente de validation
+                  <Link to="/users">Tout valider →</Link>
+                </h3>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr><th>Nom</th><th>Email</th><th>Poste</th><th>Brigade</th><th>Action</th></tr>
+                    </thead>
+                    <tbody>
+                      {comptesEnAttente.length > 0 ? (
+                        comptesEnAttente.map((u) => (
+                          <tr key={u.id}>
+                            <td>{u.nom} {u.prenom}</td>
+                            <td>{u.email}</td>
+                            <td>{u.role}</td>
+                            <td>{getBrigadeName(u.brigade)}</td>
+                            <td>
+                              <button
+                                className="btn-sm success"
+                                onClick={async () => {
+                                  try {
+                                    await api.patch(`/accounts/users/${u.id}/valider/`);
+                                    alert(`✅ ${u.nom} ${u.prenom} validé`);
+                                    window.location.reload();
+                                  } catch (err) {
+                                    const msg = err.response?.data?.error || 'Erreur lors de la validation';
+                                    alert(`❌ ${msg}`);
+                                  }
+                                }}
+                              >
+                                Valider
+                              </button>
+                              <button
+                                className="btn-sm danger"
+                                onClick={async () => {
+                                  if (!confirm(`Rejeter ${u.nom} ${u.prenom} ?`)) return;
+                                  try {
+                                    await api.patch(`/accounts/users/${u.id}/rejeter/`);
+                                    alert(`❌ ${u.nom} ${u.prenom} rejeté`);
+                                    window.location.reload();
+                                  } catch (err) {
+                                    const msg = err.response?.data?.error || 'Erreur lors du rejet';
+                                    alert(`❌ ${msg}`);
+                                  }
+                                }}
+                              >
+                                Rejeter
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr><td colSpan="5">Aucun compte en attente</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
+            )}
 
           </main>
         </div>

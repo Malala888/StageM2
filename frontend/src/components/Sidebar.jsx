@@ -51,7 +51,7 @@ const Sidebar = () => {
             Mouvements
           </NavLink>
           <NavLink to="/stock" className={({ isActive }) => isActive ? 'active' : ''}>
-            <svg viewBox="0 0 24 24"><path d="M20 7l-8-4-8 4m16 0v10l-8 4m8-4l-8 4m-8-4l8-4m-8-4v10l8 4" /></svg>
+            <svg viewBox="0 0 24 24"><rect x="1" y="3" width="22" height="5" rx="1" /><path d="M3 8v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8" /><path d="M10 12h4" /></svg>
             Stock
           </NavLink>
           <NavLink to="/users" className={({ isActive }) => isActive ? 'active' : ''}>
