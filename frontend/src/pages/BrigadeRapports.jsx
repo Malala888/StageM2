@@ -31,54 +31,25 @@ async function fetchBrigadeRapportsData() {
     api.get('/personnel/brigades/'),
   ]);
 
-  const brigadeId = userData.brigade;
+  const brigadeId = userData.brigade || brigades.find(b => b.chef_brigade === userData.id)?.id || null;
 
   // Récupérer le nom de la brigade du chef (user.brigade n'est qu'un ID renvoyé par l'API)
   const brigadeObj = brigades.find(b => b.id === brigadeId);
   const brigadeName = brigadeObj?.nom || 'N/A';
 
-  // Mouvements de la brigade
-  const mouvementsBrigade = mouvementsData.filter(m => m.brigade === brigadeId);
+  // Mouvements de la brigade (sortants ET transferts entrants)
+  const mouvementsBrigade = mouvementsData.filter(m => m.brigade === brigadeId || m.brigade_destination === brigadeId);
 
   // Agents de la brigade
   const agentsBrigade = usersData.filter(u => u.brigade === brigadeId);
-  const agentsActifs = agentsBrigade.filter(u => u.statut === 'ACTIF');
-
-  // Statistiques
-  const totalMouvements = mouvementsBrigade.length;
-  const empruntsEnCours = mouvementsBrigade.filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS').length;
-  const retards = mouvementsBrigade.filter(m => m.statut === 'EN_RETARD').length;
-
-  // Matériels abîmés : on prend tous les matériels de la brigade ? Ou on se base sur les mouvements ?
-  // On peut prendre les matériels qui apparaissent dans les mouvements de la brigade.
-  const materielsIds = [...new Set(mouvementsBrigade.map(m => m.materiel))];
-  const materielsBrigade = materielsData.filter(m => materielsIds.includes(m.id));
-
-  // Pour les matériels abîmés, on peut compter les quantités en stock avec état MAUVAIS ou HORS_SERVICE pour ces matériels.
-  // Simplification : on prend tous les stocks pour ces matériels.
-  const stocksMateriels = stockData.filter(s => materielsIds.includes(s.materiel));
-  const materielsAbimes = stocksMateriels
-    .filter(s => s.etat === 'MAUVAIS' || s.etat === 'HORS_SERVICE')
-    .reduce((acc, s) => acc + s.quantite, 0);
-
-  // Stock total (pour les matériels de la brigade ? On peut prendre tout le stock, car c'est le stock global de la brigade)
-  const stockTotal = stocksMateriels.reduce((acc, s) => acc + s.quantite, 0);
-
-  // Mouvements du mois (approximatif, on prend les 30 derniers jours)
-  const nowDate = new Date();
-  const moisDebut = new Date(nowDate.getFullYear(), nowDate.getMonth(), 1);
-  const mouvementsMois = mouvementsBrigade.filter(m => new Date(m.date_mouvement) >= moisDebut);
-  const mouvementsMoisCount = mouvementsMois.length;
 
   const result = {
     user: userData,
-    totalMouvements,
-    empruntsEnCours,
-    retards,
-    materielsAbimes,
-    stockTotal,
-    agentsActifs: agentsActifs.length,
-    mouvementsMois: mouvementsMoisCount,
+    mouvements: mouvementsBrigade,
+    // stockData est déjà scopé par le backend à cette brigade (+ dépôt central)
+    stock: stockData,
+    materiels: materielsData,
+    agentsBrigade,
     brigadeName,
   };
 
@@ -109,16 +80,86 @@ export function BrigadeRapportsError() {
 }
 
 const BrigadeRapports = () => {
-  const { user, totalMouvements, empruntsEnCours, retards, materielsAbimes, stockTotal, agentsActifs, mouvementsMois, brigadeName } = useLoaderData();
+  const { user, mouvements, stock, materiels, agentsBrigade, brigadeName } = useLoaderData();
 
   const [periode, setPeriode] = useState('');
 
-  const handleGenerer = () => {
-    alert(`📊 Rapport généré !\nPériode: ${periode || 'Toutes'}`);
+  const agentsActifs = agentsBrigade.filter(u => u.statut === 'ACTIF').length;
+
+  // ─── Mouvements filtrés selon la période choisie ───
+  const getDateLimite = (p) => {
+    const now = new Date();
+    if (p === 'mois') return new Date(now.getFullYear(), now.getMonth(), 1);
+    if (p === 'trimestre') return new Date(now.getFullYear(), now.getMonth() - 2, 1);
+    if (p === 'annee') return new Date(now.getFullYear(), 0, 1);
+    return null;
+  };
+
+  const mouvementsFiltres = mouvements.filter(m => {
+    if (!periode) return true;
+    const limite = getDateLimite(periode);
+    return !limite || new Date(m.date_mouvement) >= limite;
+  });
+
+  const totalMouvements = mouvementsFiltres.length;
+  const empruntsEnCours = mouvementsFiltres.filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS').length;
+  const retards = mouvementsFiltres.filter(m => m.statut === 'EN_RETARD').length;
+
+  const now = new Date();
+  const moisDebut = new Date(now.getFullYear(), now.getMonth(), 1);
+  const mouvementsMois = mouvements.filter(m => new Date(m.date_mouvement) >= moisDebut).length;
+
+  // Stock déjà scopé par le backend à cette brigade (+ dépôt central) : pas de filtre supplémentaire nécessaire
+  const materielsAbimes = stock.filter(s => s.etat === 'MAUVAIS' || s.etat === 'HORS_SERVICE').reduce((acc, s) => acc + s.quantite, 0);
+  const stockTotal = stock.reduce((acc, s) => acc + s.quantite, 0);
+
+  const handleGenerer = (e) => {
+    e.preventDefault();
+    const periodeLabel = { mois: 'Ce mois', trimestre: 'Ce trimestre', annee: 'Cette année' }[periode] || 'Toutes périodes';
+    alert(`📊 Rapport mis à jour\nPériode : ${periodeLabel}`);
   };
 
   const handleExportPDF = () => {
-    alert('📥 Export PDF en cours...');
+    const dateStr = new Date().toLocaleDateString('fr-FR');
+    const periodeLabel = { mois: 'Ce mois', trimestre: 'Ce trimestre', annee: 'Cette année' }[periode] || 'Toutes périodes';
+
+    const html = `
+      <html>
+        <head>
+          <title>Rapport Brigade - ${dateStr}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 30px; color: #0f172a; }
+            h1 { font-size: 20px; border-bottom: 2px solid #2563eb; padding-bottom: 8px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+            th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
+            th { background: #f1f5f9; }
+            .meta { color: #64748b; font-size: 12px; margin-bottom: 16px; }
+          </style>
+        </head>
+        <body>
+          <h1>Rapport - Brigade ${brigadeName}</h1>
+          <div class="meta">Généré le ${dateStr} — Période : ${periodeLabel}</div>
+          <table>
+            <tr><th>Mouvements</th><td>${totalMouvements}</td></tr>
+            <tr><th>Emprunts en cours</th><td>${empruntsEnCours}</td></tr>
+            <tr><th>Retards</th><td>${retards}</td></tr>
+            <tr><th>Matériels abîmés</th><td>${materielsAbimes}</td></tr>
+            <tr><th>Stock total</th><td>${stockTotal}</td></tr>
+            <tr><th>Agents actifs</th><td>${agentsActifs}</td></tr>
+          </table>
+        </body>
+      </html>
+    `;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('❌ Le navigateur a bloqué la fenêtre d\'impression. Autorisez les pop-ups pour ce site.');
+      return;
+    }
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => printWindow.print(), 300);
   };
 
   const handleCardClick = (titre, detail) => {
@@ -385,7 +426,7 @@ const BrigadeRapports = () => {
                 <div className="icon">📊</div>
                 <div className="title">Emprunts en cours</div>
                 <div className="desc">{empruntsEnCours} matériels actuellement empruntés</div>
-                <span className="badge yellow">{empruntsEnCours > 0 ? `+${empruntsEnCours} ce mois` : 'Aucun'}</span>
+                <span className="badge yellow">{empruntsEnCours > 0 ? `+${empruntsEnCours} en cours` : 'Aucun'}</span>
               </div>
               <div className="report-card" onClick={() => handleCardClick('Retards', `${retards} retards signalés`)}>
                 <div className="icon">⏰</div>

@@ -29,42 +29,45 @@ async function fetchBrigadeStockData() {
     api.get('/personnel/brigades/'),
   ]);
 
-  // Récupérer les matériels qui ont été utilisés dans la brigade du chef
-  const brigadeId = userData.brigade;
+  // Récupérer la brigade du chef (repli sur Brigade.chef_brigade si user.brigade n'est pas
+  // renseigné, cohérent avec _get_user_brigade côté backend)
+  const brigadeId = userData.brigade || brigades.find(b => b.chef_brigade === userData.id)?.id || null;
 
   // Récupérer le nom de la brigade du chef (user.brigade n'est qu'un ID renvoyé par l'API)
   const brigadeObj = brigades.find(b => b.id === brigadeId);
   const brigadeName = brigadeObj?.nom || 'N/A';
-  const mouvementsBrigade = mouvementsData.filter(m => m.brigade === brigadeId);
-  const materielIds = [...new Set(mouvementsBrigade.map(m => m.materiel))];
-  const materielsBrigade = materielsData.filter(m => materielIds.includes(m.id));
 
-  // Calcul du stock total par état (global)
+  // stockData est déjà scopé par le backend à cette brigade (+ dépôt central) pour un
+  // Chef de Brigade : pas besoin de le refiltrer, ni de passer par l'historique des mouvements.
   const stockParEtat = stockData.reduce((acc, item) => {
     acc[item.etat] = (acc[item.etat] || 0) + item.quantite;
     return acc;
   }, {});
 
-  // Quantité totale par matériel (global)
   const quantitesParMateriel = {};
   stockData.forEach(s => {
     if (!quantitesParMateriel[s.materiel]) quantitesParMateriel[s.materiel] = 0;
     quantitesParMateriel[s.materiel] += s.quantite;
   });
 
-  // Alertes de stock bas (matériels de la brigade avec total <= seuil)
+  // Matériels visibles dans le stock de cette brigade (y compris dépôt central)
+  const materielIdsVisibles = [...new Set(stockData.map(s => s.materiel))];
+  const materielsBrigade = materielsData.filter(m => materielIdsVisibles.includes(m.id));
+
+  // Alertes de stock bas, y compris les ruptures totales (total === 0)
   const alertes = materielsBrigade
     .map(m => ({
       ...m,
       total: quantitesParMateriel[m.id] || 0,
     }))
-    .filter(m => m.total > 0 && m.total <= m.seuil_alerte)
+    .filter(m => m.total <= m.seuil_alerte)
     .sort((a, b) => a.total - b.total);
 
   const result = {
     user: userData,
     stockParEtat,
     alertes,
+    brigadeId,
     brigadeName,
   };
 
@@ -95,10 +98,16 @@ export function BrigadeStockError() {
 }
 
 const BrigadeStock = () => {
-  const { user, stockParEtat, alertes, brigadeName } = useLoaderData();
+  const { user, stockParEtat, alertes, brigadeId, brigadeName } = useLoaderData();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [filteredAlertes, setFilteredAlertes] = useState(alertes);
+
+  // ─── Modal Approvisionner ───
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalSaving, setModalSaving] = useState(false);
+  const [modalError, setModalError] = useState('');
+  const [modalForm, setModalForm] = useState({ materielId: null, materielNom: '', quantite: 1, etat: 'NEUF' });
 
   useEffect(() => {
     let result = alertes;
@@ -111,30 +120,45 @@ const BrigadeStock = () => {
     setFilteredAlertes(result);
   }, [searchTerm, alertes]);
 
-  const handleApprovisionner = async (materielId, nom) => {
-    const quantite = parseInt(prompt(`Quantité à approvisionner pour "${nom}" :`, '1'));
-    if (!quantite || quantite <= 0) return;
+  const openApproModal = (materielId, nom) => {
+    setModalError('');
+    setModalForm({ materielId, materielNom: nom, quantite: 1, etat: 'NEUF' });
+    setModalOpen(true);
+  };
 
-    const etat = prompt('État (NEUF, BON, MOYEN, MAUVAIS, HORS_SERVICE) :', 'NEUF') || 'NEUF';
-    if (!['NEUF', 'BON', 'MOYEN', 'MAUVAIS', 'HORS_SERVICE'].includes(etat.toUpperCase())) {
-      alert('État invalide.');
+  const closeModal = () => {
+    if (modalSaving) return;
+    setModalOpen(false);
+  };
+
+  const handleApproSubmit = async (e) => {
+    e.preventDefault();
+    const quantite = parseInt(modalForm.quantite);
+    if (!quantite || quantite <= 0) {
+      setModalError('La quantité doit être un nombre positif.');
       return;
     }
+    setModalSaving(true);
+    setModalError('');
 
     try {
       await api.post('/materiaux/mouvements/', {
         type: 'APPROVISIONNEMENT',
-        materiel: materielId,
+        materiel: modalForm.materielId,
         quantite,
+        etat: modalForm.etat,
         date_mouvement: new Date().toISOString().split('T')[0],
-        brigade: user.brigade,
-        commentaire: `Approvisionnement de ${quantite} ${nom} en état ${etat.toUpperCase()}`
+        // La brigade est de toute façon forcée côté serveur à la brigade du chef connecté.
+        brigade: brigadeId,
+        commentaire: `Approvisionnement de ${quantite} ${modalForm.materielNom} en état ${modalForm.etat}`,
       });
-      alert(`✅ ${quantite} ${nom} approvisionné(s) avec succès !`);
+      setModalOpen(false);
       window.location.reload();
     } catch (err) {
-      console.error(err);
-      alert('❌ Erreur lors de l\'approvisionnement.');
+      const msg = err.response?.data?.error || (err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de l\'approvisionnement.');
+      setModalError(msg);
+    } finally {
+      setModalSaving(false);
     }
   };
 
@@ -401,6 +425,80 @@ const BrigadeStock = () => {
         @media (max-width: 480px) {
           .stock-grid { grid-template-columns: 1fr; }
         }
+
+        /* ─── Modal ─── */
+        .modal-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(15, 23, 42, 0.45);
+          backdrop-filter: blur(2px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+          padding: 16px;
+        }
+        .modal-card {
+          background: #ffffff;
+          border-radius: 16px;
+          width: 100%;
+          max-width: 480px;
+          max-height: 90vh;
+          overflow-y: auto;
+          box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+        }
+        .modal-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 18px 22px;
+          border-bottom: 1px solid #e2e8f0;
+        }
+        .modal-header h3 { font-size: 1rem; font-weight: 700; color: #0f172a; margin: 0; }
+        .modal-close {
+          background: none;
+          border: none;
+          font-size: 1.2rem;
+          color: #64748b;
+          cursor: pointer;
+          line-height: 1;
+          padding: 4px;
+        }
+        .modal-close:hover { color: #0f172a; }
+        .modal-body { padding: 20px 22px; }
+        .modal-field { margin-bottom: 14px; }
+        .modal-field label { display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 6px; }
+        .modal-field input,
+        .modal-field select {
+          width: 100%;
+          padding: 9px 12px;
+          border: 1px solid #cbd5e1;
+          border-radius: 8px;
+          font-size: 0.9rem;
+          box-sizing: border-box;
+        }
+        .modal-error {
+          background: #fef2f2;
+          color: #b91c1c;
+          border: 1px solid #fecaca;
+          border-radius: 8px;
+          padding: 8px 12px;
+          font-size: 0.82rem;
+          margin-bottom: 14px;
+        }
+        .modal-footer {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          padding: 16px 22px;
+          border-top: 1px solid #e2e8f0;
+        }
+        .modal-footer button { padding: 9px 18px; border-radius: 8px; font-size: 0.85rem; font-weight: 600; cursor: pointer; border: none; }
+        .modal-footer .btn-cancel { background: #f1f5f9; color: #334155; }
+        .modal-footer .btn-cancel:hover { background: #e2e8f0; }
+        .modal-footer .btn-save { background: #2563eb; color: #fff; }
+        .modal-footer .btn-save:hover { background: #1d4ed8; }
+        .modal-footer .btn-save:disabled { opacity: 0.6; cursor: not-allowed; }
       `}</style>
 
       <div className="stock-body">
@@ -481,7 +579,7 @@ const BrigadeStock = () => {
                           <td>
                             <button
                               className="btn-sm primary"
-                              onClick={() => handleApprovisionner(m.id, m.nom)}
+                              onClick={() => openApproModal(m.id, m.nom)}
                             >
                               Approvisionner
                             </button>
@@ -496,6 +594,57 @@ const BrigadeStock = () => {
           </main>
         </div>
       </div>
+
+      {modalOpen && (
+        <div className="modal-overlay" onClick={closeModal}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>📦 Approvisionner "{modalForm.materielNom}"</h3>
+              <button className="modal-close" onClick={closeModal}>✕</button>
+            </div>
+            <form onSubmit={handleApproSubmit}>
+              <div className="modal-body">
+                {modalError && <div className="modal-error">{modalError}</div>}
+                <div className="modal-field">
+                  <label htmlFor="modal-quantite">Quantité *</label>
+                  <input
+                    id="modal-quantite"
+                    type="number"
+                    min="1"
+                    value={modalForm.quantite}
+                    onChange={(e) => setModalForm({ ...modalForm, quantite: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="modal-field">
+                  <label htmlFor="modal-etat">État *</label>
+                  <select
+                    id="modal-etat"
+                    value={modalForm.etat}
+                    onChange={(e) => setModalForm({ ...modalForm, etat: e.target.value })}
+                  >
+                    <option value="NEUF">NEUF</option>
+                    <option value="BON">BON</option>
+                    <option value="MOYEN">MOYEN</option>
+                    <option value="MAUVAIS">MAUVAIS</option>
+                    <option value="HORS_SERVICE">HORS_SERVICE</option>
+                  </select>
+                </div>
+                <div className="modal-field">
+                  <label>Brigade destinataire</label>
+                  <input type="text" value={brigadeName} disabled />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn-cancel" onClick={closeModal}>Annuler</button>
+                <button type="submit" className="btn-save" disabled={modalSaving}>
+                  {modalSaving ? 'Enregistrement...' : 'Approvisionner'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   );
 };

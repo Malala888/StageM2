@@ -32,9 +32,12 @@ async function fetchBrigadeMouvementsData() {
   // Filtrer les agents (GL et CN) pour le formulaire
   const agents = usersData.filter(u => u.role === 'GL' || u.role === 'CN');
 
-  // Filtrer les mouvements par brigade du chef
-  const brigadeId = userData.brigade;
-  const mouvementsBrigade = mouvementsData.filter(m => m.brigade === brigadeId);
+  // Récupérer la brigade du chef (repli sur Brigade.chef_brigade si user.brigade n'est pas
+  // renseigné, cohérent avec _get_user_brigade côté backend)
+  const brigadeId = userData.brigade || brigades.find(b => b.chef_brigade === userData.id)?.id || null;
+
+  // Mouvements de la brigade : sortants ET transferts entrants (où elle est la destination)
+  const mouvementsBrigade = mouvementsData.filter(m => m.brigade === brigadeId || m.brigade_destination === brigadeId);
 
   // Récupérer le nom de la brigade du chef (user.brigade n'est qu'un ID renvoyé par l'API)
   const brigadeObj = brigades.find(b => b.id === brigadeId);
@@ -44,6 +47,8 @@ async function fetchBrigadeMouvementsData() {
     user: userData,
     materiels: materielsData,
     agents,
+    brigades, // toutes les brigades, nécessaire pour choisir la destination d'un TRANSFERT
+    brigadeId,
     mouvements: mouvementsBrigade,
     brigadeName,
   };
@@ -78,7 +83,7 @@ export function BrigadeMouvementsError() {
 
 // ─── Composant principal ───
 const BrigadeMouvements = () => {
-  const { user, materiels, agents, mouvements: initialMouvements, brigadeName } = useLoaderData();
+  const { user, materiels, agents, brigades, brigadeId, mouvements: initialMouvements, brigadeName } = useLoaderData();
 
   // ─── États pour le formulaire ───
   const [type, setType] = useState('');
@@ -86,13 +91,22 @@ const BrigadeMouvements = () => {
   const [agent, setAgent] = useState('');
   const [quantite, setQuantite] = useState(1);
   const [date, setDate] = useState('');
+  const [brigadeDestination, setBrigadeDestination] = useState('');
+  const [etatMvt, setEtatMvt] = useState('NEUF');
+  const [dateRetourPrevue, setDateRetourPrevue] = useState('');
   const [commentaire, setCommentaire] = useState('');
+
+  // Types de mouvement qui nécessitent un état (pour savoir quelle ligne de Stock mettre à jour)
+  const TYPES_AVEC_ETAT = ['APPROVISIONNEMENT', 'TRANSFERT', 'REBUT', 'INVENTAIRE'];
+
+  // ─── Liste des mouvements (state, pour pouvoir l'actualiser après un ajout) ───
+  const [mouvements, setMouvements] = useState(initialMouvements);
 
   // ─── États pour les filtres ───
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('');
   const [filterDate, setFilterDate] = useState('');
-  const [filteredMouvements, setFilteredMouvements] = useState(initialMouvements);
+  const [filteredMouvements, setFilteredMouvements] = useState(mouvements);
 
   // ─── États pour la soumission ───
   const [submitting, setSubmitting] = useState(false);
@@ -112,13 +126,12 @@ const BrigadeMouvements = () => {
 
   // ─── Appliquer les filtres ───
   useEffect(() => {
-    let result = initialMouvements;
+    let result = mouvements;
 
     if (searchTerm.trim()) {
       result = result.filter(m =>
-        (m.materiel?.nom || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (m.agent_concerner?.nom || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (m.agent_concerner?.prenom || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (m.materiel_nom || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (m.agent_concerner_nom || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         m.numero.toLowerCase().includes(searchTerm.toLowerCase())
       );
     }
@@ -132,7 +145,7 @@ const BrigadeMouvements = () => {
     }
 
     setFilteredMouvements(result);
-  }, [searchTerm, filterType, filterDate, initialMouvements]);
+  }, [searchTerm, filterType, filterDate, mouvements]);
 
   // ─── Handlers ───
   const handleFilter = (e) => {
@@ -155,18 +168,44 @@ const BrigadeMouvements = () => {
       setSubmitting(false);
       return;
     }
+    if (TYPES_AVEC_ETAT.includes(type) && !etatMvt) {
+      setSubmitError(`L'état est obligatoire pour un mouvement de type ${type}.`);
+      setSubmitting(false);
+      return;
+    }
+    if (type === 'TRANSFERT' && !brigadeDestination) {
+      setSubmitError('La brigade de destination est obligatoire pour un transfert.');
+      setSubmitting(false);
+      return;
+    }
+    if (type === 'EMPRUNT' && !dateRetourPrevue) {
+      setSubmitError('La date de retour prévue est obligatoire pour un emprunt.');
+      setSubmitting(false);
+      return;
+    }
 
     const payload = {
       type,
       materiel: parseInt(materiel),
       quantite,
       date_mouvement: date,
-      brigade: user.brigade, // La brigade du chef
+      // La brigade est de toute façon forcée côté serveur à la brigade du chef connecté ;
+      // on l'envoie ici seulement à titre indicatif.
+      brigade: user.brigade,
       commentaire: commentaire || '',
     };
 
     if (agent) {
       payload.agent_concerner = parseInt(agent);
+    }
+    if (TYPES_AVEC_ETAT.includes(type)) {
+      payload.etat = etatMvt;
+    }
+    if (type === 'TRANSFERT') {
+      payload.brigade_destination = parseInt(brigadeDestination);
+    }
+    if (type === 'EMPRUNT') {
+      payload.date_retour_prevue = dateRetourPrevue;
     }
 
     try {
@@ -176,15 +215,19 @@ const BrigadeMouvements = () => {
       setMateriel('');
       setAgent('');
       setQuantite(1);
+      setBrigadeDestination('');
+      setEtatMvt('NEUF');
+      setDateRetourPrevue('');
       setCommentaire('');
 
-      // Recharger les mouvements de la brigade
+      // Recharger les mouvements (re-scopés à la brigade par le backend)
       const { data: newMouvements } = await api.get('/materiaux/mouvements/');
-      const brigadeId = user.brigade;
-      setFilteredMouvements(newMouvements.filter(m => m.brigade === brigadeId));
+      setMouvements(newMouvements);
     } catch (err) {
       console.error(err);
-      setSubmitError('Erreur lors de l\'enregistrement du mouvement.');
+      const msg = err.response?.data?.error
+        || (err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de l\'enregistrement du mouvement.');
+      setSubmitError(msg);
     } finally {
       setSubmitting(false);
     }
@@ -514,6 +557,7 @@ const BrigadeMouvements = () => {
                       <option value="TRANSFERT">🔄 TRANSFERT</option>
                       <option value="REPARATION">🔧 RÉPARATION</option>
                       <option value="REBUT">🗑️ REBUT</option>
+                      <option value="INVENTAIRE">🧮 INVENTAIRE</option>
                     </select>
                   </div>
                   <div className="field">
@@ -578,6 +622,55 @@ const BrigadeMouvements = () => {
                     />
                   </div>
                 </div>
+                {(TYPES_AVEC_ETAT.includes(type) || type === 'TRANSFERT' || type === 'EMPRUNT') && (
+                  <div className="form-row">
+                    {TYPES_AVEC_ETAT.includes(type) && (
+                      <div className="field">
+                        <label htmlFor="etat-mvt">État *</label>
+                        <select
+                          id="etat-mvt"
+                          value={etatMvt}
+                          onChange={(e) => setEtatMvt(e.target.value)}
+                          required
+                        >
+                          <option value="NEUF">NEUF</option>
+                          <option value="BON">BON</option>
+                          <option value="MOYEN">MOYEN</option>
+                          <option value="MAUVAIS">MAUVAIS</option>
+                          <option value="HORS_SERVICE">HORS_SERVICE</option>
+                        </select>
+                      </div>
+                    )}
+                    {type === 'TRANSFERT' && (
+                      <div className="field">
+                        <label htmlFor="brigade-dest">Brigade de destination *</label>
+                        <select
+                          id="brigade-dest"
+                          value={brigadeDestination}
+                          onChange={(e) => setBrigadeDestination(e.target.value)}
+                          required
+                        >
+                          <option value="">Sélectionner</option>
+                          {brigades.filter(b => b.id !== brigadeId).map(b => (
+                            <option key={b.id} value={b.id}>{b.nom} ({b.code})</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                    {type === 'EMPRUNT' && (
+                      <div className="field">
+                        <label htmlFor="date-retour">Date de retour prévue *</label>
+                        <input
+                          type="date"
+                          id="date-retour"
+                          value={dateRetourPrevue}
+                          onChange={(e) => setDateRetourPrevue(e.target.value)}
+                          required
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
                 {submitError && <div className="submit-error">{submitError}</div>}
                 <button
                   type="submit"
@@ -611,6 +704,7 @@ const BrigadeMouvements = () => {
                   <option value="TRANSFERT">TRANSFERT</option>
                   <option value="REPARATION">RÉPARATION</option>
                   <option value="REBUT">REBUT</option>
+                  <option value="INVENTAIRE">INVENTAIRE</option>
                 </select>
                 <input
                   type="date"
@@ -674,9 +768,9 @@ const BrigadeMouvements = () => {
                         return (
                           <tr key={m.id}>
                             <td><strong>{m.numero}</strong></td>
-                            <td>{m.materiel?.nom || 'N/A'}</td>
+                            <td>{m.materiel_nom || 'N/A'}</td>
                             <td><span className={`type-badge ${typeClass}`}>{m.type}</span></td>
-                            <td>{m.agent_concerner ? `${m.agent_concerner.nom} ${m.agent_concerner.prenom}` : '—'}</td>
+                            <td>{m.agent_concerner_nom || '—'}</td>
                             <td>{new Date(m.date_mouvement).toLocaleDateString('fr-FR')}</td>
                             <td><span className={`badge ${statutClass}`}>{m.statut}</span></td>
                             <td className="actions-cell">

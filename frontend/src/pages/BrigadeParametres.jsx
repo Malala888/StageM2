@@ -57,11 +57,13 @@ export function BrigadeParametresError() {
 const BrigadeParametres = () => {
   const { user: initialUser, brigadeName } = useLoaderData();
 
+  // ─── État utilisateur (réactif, plus de mutation directe de l'objet du loader) ───
+  const [user, setUser] = useState(initialUser);
+
   // ─── États du formulaire ───
   const [nom, setNom] = useState(initialUser?.nom || '');
   const [prenom, setPrenom] = useState(initialUser?.prenom || '');
   const [email, setEmail] = useState(initialUser?.email || '');
-  const [telephone, setTelephone] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -69,23 +71,47 @@ const BrigadeParametres = () => {
   const [updateError, setUpdateError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // ─── Extraction propre du message d'erreur renvoyé par l'API ───
+  const extractErrorMessage = (err, fallback) => {
+    const data = err.response?.data;
+    if (!data) return fallback;
+    if (data.error) return data.error;
+    if (data.detail) return data.detail;
+    if (typeof data === 'object') {
+      const messages = Object.entries(data).map(([field, val]) => {
+        const text = Array.isArray(val) ? val.join(' ') : val;
+        return field === 'non_field_errors' ? text : `${field} : ${text}`;
+      });
+      if (messages.length) return messages.join(' — ');
+    }
+    return fallback;
+  };
+
   // ─── Handlers ───
   const handleSubmit = async (e) => {
     e.preventDefault();
     setUpdateError('');
     setUpdateSuccess('');
-    setIsSubmitting(true);
 
     if (newPassword && newPassword !== confirmPassword) {
-      setUpdateError('Les mots de passe ne correspondent pas');
-      setIsSubmitting(false);
+      setUpdateError('Les mots de passe ne correspondent pas.');
+      return;
+    }
+    if (newPassword && newPassword.length < 8) {
+      setUpdateError('Le nouveau mot de passe doit contenir au moins 8 caractères.');
+      return;
+    }
+    if (newPassword && !currentPassword) {
+      setUpdateError('Veuillez saisir votre mot de passe actuel pour le changer.');
       return;
     }
 
+    setIsSubmitting(true);
     try {
       // 1. Mettre à jour le profil (nom, prénom, email)
       const payload = { nom, prenom, email };
-      await api.patch(`/accounts/users/${initialUser.id}/`, payload);
+      const { data: updatedUser } = await api.patch(`/accounts/users/${user.id}/`, payload);
+      setUser(updatedUser);
 
       // 2. Changer le mot de passe si demandé
       if (newPassword && currentPassword) {
@@ -99,16 +125,9 @@ const BrigadeParametres = () => {
       }
 
       setUpdateSuccess('✅ Profil mis à jour avec succès !');
-
-      // Mettre à jour l'utilisateur dans le cache local
-      initialUser.nom = nom;
-      initialUser.prenom = prenom;
-      initialUser.email = email;
-
     } catch (err) {
       console.error(err);
-      const msg = err.response?.data?.detail || err.response?.data?.message || 'Erreur lors de la mise à jour du profil';
-      setUpdateError(`❌ ${msg}`);
+      setUpdateError(`❌ ${extractErrorMessage(err, 'Erreur lors de la mise à jour du profil')}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -356,9 +375,9 @@ const BrigadeParametres = () => {
                 </div>
               </div>
               <div className="user-badge">
-                <div className="avatar">{initialUser?.nom ? initialUser.nom[0] : 'CB'}</div>
+                <div className="avatar">{user?.nom ? user.nom[0] : '—'}</div>
                 <div>
-                  <div className="name">{initialUser?.nom || 'Chef'}</div>
+                  <div className="name">{user?.nom || '—'}</div>
                   <div className="role">Chef de Brigade</div>
                 </div>
               </div>
@@ -404,18 +423,8 @@ const BrigadeParametres = () => {
                     <span className="help">L'email vous sert d'identifiant pour la connexion.</span>
                   </div>
                   <div className="field">
-                    <label htmlFor="telephone">Téléphone</label>
-                    <input
-                      type="text"
-                      id="telephone"
-                      value={telephone}
-                      onChange={(e) => setTelephone(e.target.value)}
-                      placeholder="+261 XX XXX XX XX"
-                    />
-                  </div>
-                  <div className="field">
                     <label htmlFor="role">Rôle</label>
-                    <input type="text" id="role" value={initialUser?.role || 'CHEF_BRIGADE'} disabled />
+                    <input type="text" id="role" value={user?.role || '—'} disabled />
                     <span className="help">Le rôle ne peut pas être modifié ici.</span>
                   </div>
                   <div className="field">
@@ -425,7 +434,7 @@ const BrigadeParametres = () => {
                   </div>
                   <div className="field full">
                     <label htmlFor="statut">Statut du compte</label>
-                    <input type="text" id="statut" value={initialUser?.statut || 'ACTIF'} disabled />
+                    <input type="text" id="statut" value={user?.statut || '—'} disabled />
                   </div>
 
                   {/* ─── Changement de mot de passe ─── */}

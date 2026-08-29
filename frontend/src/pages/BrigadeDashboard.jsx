@@ -29,8 +29,9 @@ async function fetchBrigadeDashboardData() {
     api.get('/personnel/brigades/'),
   ]);
 
-  // Récupérer la brigade du chef
-  const brigadeId = userData.brigade;
+  // Récupérer la brigade du chef (repli sur Brigade.chef_brigade si user.brigade n'est pas renseigné,
+  // cohérent avec _get_user_brigade côté backend)
+  const brigadeId = userData.brigade || brigades.find(b => b.chef_brigade === userData.id)?.id || null;
   const brigade = brigades.find(b => b.id === brigadeId);
   const brigadeName = brigade?.nom || 'N/A';
 
@@ -39,8 +40,8 @@ async function fetchBrigadeDashboardData() {
   const actifs = usersBrigade.filter(u => u.statut === 'ACTIF');
   const enAttente = usersBrigade.filter(u => u.statut === 'EN_ATTENTE');
 
-  // Mouvements de la brigade
-  const mouvementsBrigade = mouvements.filter(m => m.brigade === brigadeId);
+  // Mouvements de la brigade (sortants ET transferts entrants où elle est la destination)
+  const mouvementsBrigade = mouvements.filter(m => m.brigade === brigadeId || m.brigade_destination === brigadeId);
   const derniers = mouvementsBrigade.slice(0, 5);
   const enCours = mouvementsBrigade.filter(m => m.statut === 'EN_COURS');
   const retards = mouvementsBrigade.filter(m => m.statut === 'EN_RETARD');
@@ -53,8 +54,8 @@ async function fetchBrigadeDashboardData() {
   const activitesList = derniers.map((m, index) => ({
     id: m.id || index,
     type: m.type,
-    materiel: m.materiel ? m.materiel.nom : 'Matériel',
-    agent: m.agent_concerner ? `${m.agent_concerner.nom} ${m.agent_concerner.prenom}` : 'Système',
+    materiel: m.materiel_nom || 'Matériel',
+    agent: m.agent_concerner_nom || 'Système',
     date: new Date(m.date_mouvement).toLocaleDateString('fr-FR'),
     statut: m.statut,
   }));
@@ -109,14 +110,16 @@ export function BrigadeDashboardError() {
 const BrigadeDashboard = () => {
   const { user, brigade, brigadeName, stats, derniersMouvements, activites, comptesEnAttente } = useLoaderData();
 
-  // Fonction de validation hiérarchique (Chef de Brigade peut valider GL et CN de sa brigade)
+  // Fonction de validation hiérarchique (alignée sur _user_can_validate côté backend :
+  // Chef de Brigade valide GL/CN de sa brigade ; ADMIN ne valide que des CHEF_SECTION,
+  // donc jamais pertinent sur cette page)
   const canValidate = (targetUser) => {
     if (!user) return false;
-    if (user.role === 'ADMIN') return true;
+    if (user.role === 'ADMIN') return targetUser.role === 'CHEF_SECTION';
     if (user.role === 'CHEF_BRIGADE') {
-      if (!user.brigade) return false;
+      if (!brigade?.id) return false;
       if (!['GL', 'CN'].includes(targetUser.role)) return false;
-      return targetUser.brigade === user.brigade;
+      return targetUser.brigade === brigade.id;
     }
     return false;
   };
@@ -505,9 +508,9 @@ const BrigadeDashboard = () => {
                       {derniersMouvements.length > 0 ? (
                         derniersMouvements.map((mvt) => (
                           <tr key={mvt.id}>
-                            <td>{mvt.materiel?.nom || 'N/A'}</td>
+                            <td>{mvt.materiel_nom || 'N/A'}</td>
                             <td>{mvt.type}</td>
-                            <td>{mvt.agent_concerner ? `${mvt.agent_concerner.nom} ${mvt.agent_concerner.prenom}` : 'Système'}</td>
+                            <td>{mvt.agent_concerner_nom || 'Système'}</td>
                             <td>
                               <span className={`badge ${mvt.statut === 'EN_COURS' ? 'yellow' : mvt.statut === 'RETOURNE' ? 'green' : mvt.statut === 'EN_RETARD' ? 'red' : 'blue'}`}>
                                 {mvt.statut}
@@ -573,7 +576,7 @@ const BrigadeDashboard = () => {
                                         window.location.reload();
                                       } catch (err) {
                                         console.error(err);
-                                        alert('❌ Erreur lors de la validation');
+                                        alert(`❌ ${err.response?.data?.error || 'Erreur lors de la validation'}`);
                                       }
                                     }}
                                   >
@@ -589,7 +592,7 @@ const BrigadeDashboard = () => {
                                         window.location.reload();
                                       } catch (err) {
                                         console.error(err);
-                                        alert('❌ Erreur lors du rejet');
+                                        alert(`❌ ${err.response?.data?.error || 'Erreur lors du rejet'}`);
                                       }
                                     }}
                                   >

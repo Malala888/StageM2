@@ -20,11 +20,13 @@ async function fetchSectionStockData() {
     { data: materielsData },
     { data: stockData },
     { data: brigadesData },
+    { data: sectionsData },
   ] = await Promise.all([
     api.get('/accounts/users/me/'),
     api.get('/materiaux/materiels/'),
     api.get('/materiaux/stock/'),
     api.get('/personnel/brigades/'),
+    api.get('/personnel/sections/'),
   ]);
 
   // Filtrer les brigades de la section du chef
@@ -57,15 +59,12 @@ async function fetchSectionStockData() {
       ...m,
       total: quantitesParMateriel[m.id] || 0,
     }))
-    .filter(m => m.total > 0 && m.total <= m.seuil_alerte)
+    .filter(m => m.total <= m.seuil_alerte) // stock bas, y compris les ruptures totales (total === 0)
     .sort((a, b) => a.total - b.total);
-
-  // Pour chaque alerte, on peut essayer de trouver la brigade correspondante (via le stock ? pas direct)
-  // On affichera la brigade du chef ou une valeur par défaut.
-  // Pour plus de précision, on pourrait lier un matériel à une brigade via les mouvements, mais on simplifie.
 
   const result = {
     user: userData,
+    sectionName: sectionsData.find(s => s.id === sectionId)?.nom || 'N/A',
     stockParEtat,
     alertes,
     materiels: materielsData,
@@ -103,11 +102,17 @@ export function SectionStockError() {
 
 // ─── Composant principal ───
 const SectionStock = () => {
-  const { user, stockParEtat, alertes, materiels, stockData, brigades } = useLoaderData();
+  const { user, sectionName, stockParEtat, alertes, materiels, stockData, brigades } = useLoaderData();
 
   // ─── États pour les filtres ───
   const [searchTerm, setSearchTerm] = useState('');
   const [filteredAlertes, setFilteredAlertes] = useState(alertes);
+
+  // ─── Modal Approvisionner ───
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalSaving, setModalSaving] = useState(false);
+  const [modalError, setModalError] = useState('');
+  const [modalForm, setModalForm] = useState({ materielId: null, materielNom: '', quantite: 1, etat: 'NEUF', brigade: '' });
 
   // Appliquer les filtres sur les alertes
   useEffect(() => {
@@ -122,30 +127,48 @@ const SectionStock = () => {
   }, [searchTerm, alertes]);
 
   // ─── Gérer l'approvisionnement ───
-  const handleApprovisionner = async (materielId, nom) => {
-    const quantite = parseInt(prompt(`Quantité à approvisionner pour "${nom}" :`, '1'));
-    if (!quantite || quantite <= 0) return;
+  const openApproModal = (materielId, nom) => {
+    setModalError('');
+    setModalForm({ materielId, materielNom: nom, quantite: 1, etat: 'NEUF', brigade: brigades[0]?.id || '' });
+    setModalOpen(true);
+  };
 
-    const etat = prompt(`État (NEUF, BON, MOYEN, MAUVAIS, HORS_SERVICE) :`, 'NEUF') || 'NEUF';
-    if (!['NEUF', 'BON', 'MOYEN', 'MAUVAIS', 'HORS_SERVICE'].includes(etat.toUpperCase())) {
-      alert('État invalide.');
+  const closeModal = () => {
+    if (modalSaving) return;
+    setModalOpen(false);
+  };
+
+  const handleApproSubmit = async (e) => {
+    e.preventDefault();
+    const quantite = parseInt(modalForm.quantite);
+    if (!quantite || quantite <= 0) {
+      setModalError('La quantité doit être un nombre positif.');
       return;
     }
+    if (!modalForm.brigade) {
+      setModalError('Veuillez choisir une brigade de votre section.');
+      return;
+    }
+    setModalSaving(true);
+    setModalError('');
 
     try {
       await api.post('/materiaux/mouvements/', {
         type: 'APPROVISIONNEMENT',
-        materiel: materielId,
+        materiel: modalForm.materielId,
         quantite,
+        etat: modalForm.etat,
         date_mouvement: new Date().toISOString().split('T')[0],
-        brigade: user.brigade || null, // Optionnel, on peut laisser vide pour une approvisionnement général
-        commentaire: `Approvisionnement de ${quantite} ${nom} en état ${etat.toUpperCase()}`,
+        brigade: parseInt(modalForm.brigade),
+        commentaire: `Approvisionnement de ${quantite} ${modalForm.materielNom} en état ${modalForm.etat}`,
       });
-      alert(`✅ ${quantite} ${nom} approvisionné(s) avec succès !`);
+      setModalOpen(false);
       window.location.reload();
     } catch (err) {
-      console.error(err);
-      alert('❌ Erreur lors de l\'approvisionnement.');
+      const msg = err.response?.data?.error || (err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de l\'approvisionnement.');
+      setModalError(msg);
+    } finally {
+      setModalSaving(false);
     }
   };
 
@@ -417,6 +440,80 @@ const SectionStock = () => {
         @media (max-width: 480px) {
           .stock-grid { grid-template-columns: 1fr; }
         }
+
+        /* ─── Modal ─── */
+        .modal-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(15, 23, 42, 0.45);
+          backdrop-filter: blur(2px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+          padding: 16px;
+        }
+        .modal-card {
+          background: #ffffff;
+          border-radius: 16px;
+          width: 100%;
+          max-width: 480px;
+          max-height: 90vh;
+          overflow-y: auto;
+          box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+        }
+        .modal-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 18px 22px;
+          border-bottom: 1px solid #e2e8f0;
+        }
+        .modal-header h3 { font-size: 1rem; font-weight: 700; color: #0f172a; margin: 0; }
+        .modal-close {
+          background: none;
+          border: none;
+          font-size: 1.2rem;
+          color: #64748b;
+          cursor: pointer;
+          line-height: 1;
+          padding: 4px;
+        }
+        .modal-close:hover { color: #0f172a; }
+        .modal-body { padding: 20px 22px; }
+        .modal-field { margin-bottom: 14px; }
+        .modal-field label { display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 6px; }
+        .modal-field input,
+        .modal-field select {
+          width: 100%;
+          padding: 9px 12px;
+          border: 1px solid #cbd5e1;
+          border-radius: 8px;
+          font-size: 0.9rem;
+          box-sizing: border-box;
+        }
+        .modal-error {
+          background: #fef2f2;
+          color: #b91c1c;
+          border: 1px solid #fecaca;
+          border-radius: 8px;
+          padding: 8px 12px;
+          font-size: 0.82rem;
+          margin-bottom: 14px;
+        }
+        .modal-footer {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          padding: 16px 22px;
+          border-top: 1px solid #e2e8f0;
+        }
+        .modal-footer button { padding: 9px 18px; border-radius: 8px; font-size: 0.85rem; font-weight: 600; cursor: pointer; border: none; }
+        .modal-footer .btn-cancel { background: #f1f5f9; color: #334155; }
+        .modal-footer .btn-cancel:hover { background: #e2e8f0; }
+        .modal-footer .btn-save { background: #2563eb; color: #fff; }
+        .modal-footer .btn-save:hover { background: #1d4ed8; }
+        .modal-footer .btn-save:disabled { opacity: 0.6; cursor: not-allowed; }
       `}</style>
 
       <div className="stock-body">
@@ -430,7 +527,7 @@ const SectionStock = () => {
               <div>
                 <h1>État du Stock</h1>
                 <div className="sub">
-                  Vue globale par état — Section <span className="section-badge">{user?.section?.nom || 'N/A'}</span>
+                  Vue globale par état — Section <span className="section-badge">{sectionName}</span>
                 </div>
               </div>
               <div className="user-badge">
@@ -499,7 +596,7 @@ const SectionStock = () => {
                           <td>
                             <button
                               className="btn-sm primary"
-                              onClick={() => handleApprovisionner(m.id, m.nom)}
+                              onClick={() => openApproModal(m.id, m.nom)}
                             >
                               Approvisionner
                             </button>
@@ -515,6 +612,67 @@ const SectionStock = () => {
           </main>
         </div>
       </div>
+
+      {modalOpen && (
+        <div className="modal-overlay" onClick={closeModal}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>📦 Approvisionner "{modalForm.materielNom}"</h3>
+              <button className="modal-close" onClick={closeModal}>✕</button>
+            </div>
+            <form onSubmit={handleApproSubmit}>
+              <div className="modal-body">
+                {modalError && <div className="modal-error">{modalError}</div>}
+                <div className="modal-field">
+                  <label htmlFor="modal-quantite">Quantité *</label>
+                  <input
+                    id="modal-quantite"
+                    type="number"
+                    min="1"
+                    value={modalForm.quantite}
+                    onChange={(e) => setModalForm({ ...modalForm, quantite: e.target.value })}
+                    required
+                  />
+                </div>
+                <div className="modal-field">
+                  <label htmlFor="modal-etat">État *</label>
+                  <select
+                    id="modal-etat"
+                    value={modalForm.etat}
+                    onChange={(e) => setModalForm({ ...modalForm, etat: e.target.value })}
+                  >
+                    <option value="NEUF">NEUF</option>
+                    <option value="BON">BON</option>
+                    <option value="MOYEN">MOYEN</option>
+                    <option value="MAUVAIS">MAUVAIS</option>
+                    <option value="HORS_SERVICE">HORS_SERVICE</option>
+                  </select>
+                </div>
+                <div className="modal-field">
+                  <label htmlFor="modal-brigade">Brigade destinataire *</label>
+                  <select
+                    id="modal-brigade"
+                    value={modalForm.brigade}
+                    onChange={(e) => setModalForm({ ...modalForm, brigade: e.target.value })}
+                    required
+                  >
+                    <option value="">Sélectionner</option>
+                    {brigades.map(b => (
+                      <option key={b.id} value={b.id}>{b.nom}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn-cancel" onClick={closeModal}>Annuler</button>
+                <button type="submit" className="btn-save" disabled={modalSaving}>
+                  {modalSaving ? 'Enregistrement...' : 'Approvisionner'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   );
 };

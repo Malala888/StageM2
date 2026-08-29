@@ -19,10 +19,12 @@ async function fetchSectionMaterielsData() {
     { data: userData },
     { data: materielsData },
     { data: stockData },
+    { data: sectionsData },
   ] = await Promise.all([
     api.get('/accounts/users/me/'),
     api.get('/materiaux/materiels/'),
     api.get('/materiaux/stock/'),
+    api.get('/personnel/sections/'),
   ]);
 
   // Le Chef de Section voit tous les matériels (on ne filtre pas, car les matériels ne sont pas directement liés à une section).
@@ -33,6 +35,7 @@ async function fetchSectionMaterielsData() {
     user: userData,
     materiels: materielsData,
     stockData: stockData,
+    sectionName: sectionsData.find(s => s.id === userData.section)?.nom || 'N/A',
   };
 
   sectionMaterielsCache = result;
@@ -65,13 +68,20 @@ export function SectionMaterielsError() {
 
 // ─── Composant principal ───
 const SectionMateriels = () => {
-  const { user, materiels: initialMateriels, stockData } = useLoaderData();
+  const { user, materiels: initialMateriels, stockData, sectionName } = useLoaderData();
 
   const [materiels, setMateriels] = useState(initialMateriels);
   const [searchTerm, setSearchTerm] = useState('');
   const [categorie, setCategorie] = useState('');
   const [etat, setEtat] = useState('');
   const [filteredMateriels, setFilteredMateriels] = useState(initialMateriels);
+
+  // ─── Modal Ajouter / Modifier un matériel ───
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState('add');
+  const [modalSaving, setModalSaving] = useState(false);
+  const [modalError, setModalError] = useState('');
+  const [modalForm, setModalForm] = useState({ id: null, nom: '', categorie: '', seuil_alerte: 5, description: '' });
 
   // Appliquer les filtres
   useEffect(() => {
@@ -88,8 +98,12 @@ const SectionMateriels = () => {
       result = result.filter(m => m.categorie === categorie);
     }
 
+    if (etat) {
+      result = result.filter(m => getEtatPrincipal(m.id) === etat);
+    }
+
     setFilteredMateriels(result);
-  }, [searchTerm, categorie, materiels]);
+  }, [searchTerm, categorie, etat, materiels]);
 
   // Obtenir la quantité totale d'un matériel
   const getQuantiteTotale = (materielId) => {
@@ -126,52 +140,61 @@ const SectionMateriels = () => {
     setEtat('');
   };
 
-  const handleAdd = async () => {
-    const nom = prompt('Nom du matériel:');
-    if (!nom) return;
-    const categorie = prompt('Catégorie:');
-    if (!categorie) return;
-    const seuil = parseInt(prompt('Seuil d\'alerte (nombre):') || '5');
-
-    try {
-      const { data } = await api.post('/materiaux/materiels/', {
-        nom,
-        categorie,
-        seuil_alerte: seuil
-      });
-      setMateriels([...materiels, data]);
-      setFilteredMateriels([...filteredMateriels, data]);
-      alert('✅ Matériel ajouté avec succès !');
-    } catch (err) {
-      alert('❌ Erreur lors de l\'ajout');
-      console.error(err);
-    }
+  const openAddModal = () => {
+    setModalMode('add');
+    setModalError('');
+    setModalForm({ id: null, nom: '', categorie: '', seuil_alerte: 5, description: '' });
+    setModalOpen(true);
   };
 
-  const handleEdit = async (id, nom) => {
-    const newNom = prompt('Nouveau nom:', nom);
-    if (!newNom) return;
+  const openEditModal = (m) => {
+    setModalMode('edit');
+    setModalError('');
+    setModalForm({
+      id: m.id,
+      nom: m.nom,
+      categorie: m.categorie,
+      seuil_alerte: m.seuil_alerte ?? 5,
+      description: m.description || '',
+    });
+    setModalOpen(true);
+  };
+
+  const closeModal = () => {
+    if (modalSaving) return;
+    setModalOpen(false);
+  };
+
+  const handleModalSubmit = async (e) => {
+    e.preventDefault();
+    if (!modalForm.nom.trim() || !modalForm.categorie.trim()) {
+      setModalError('Le nom et la catégorie sont obligatoires.');
+      return;
+    }
+    setModalSaving(true);
+    setModalError('');
+
+    const payload = {
+      nom: modalForm.nom.trim(),
+      categorie: modalForm.categorie.trim(),
+      seuil_alerte: parseInt(modalForm.seuil_alerte) || 5,
+      description: modalForm.description.trim(),
+    };
 
     try {
-      const { data } = await api.patch(`/materiaux/materiels/${id}/`, {
-        nom: newNom
-      });
-      const updated = materiels.map(m => m.id === id ? data : m);
-      setMateriels(updated);
-      setFilteredMateriels(updated.filter(m => {
-        let result = true;
-        if (searchTerm.trim()) {
-          result = m.nom.toLowerCase().includes(searchTerm.toLowerCase());
-        }
-        if (categorie) {
-          result = result && m.categorie === categorie;
-        }
-        return result;
-      }));
-      alert('✅ Matériel modifié avec succès !');
+      if (modalMode === 'add') {
+        const { data } = await api.post('/materiaux/materiels/', payload);
+        setMateriels(prev => [...prev, data]);
+      } else {
+        const { data } = await api.patch(`/materiaux/materiels/${modalForm.id}/`, payload);
+        setMateriels(prev => prev.map(m => m.id === modalForm.id ? data : m));
+      }
+      setModalOpen(false);
     } catch (err) {
-      alert('❌ Erreur lors de la modification');
-      console.error(err);
+      const msg = err.response?.data?.error || (err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de l\'enregistrement.');
+      setModalError(msg);
+    } finally {
+      setModalSaving(false);
     }
   };
 
@@ -194,7 +217,8 @@ const SectionMateriels = () => {
       }));
       alert('✅ Matériel supprimé avec succès !');
     } catch (err) {
-      alert('❌ Erreur lors de la suppression');
+      const msg = err.response?.data?.error || 'Erreur lors de la suppression';
+      alert(`❌ ${msg}`);
       console.error(err);
     }
   };
@@ -428,6 +452,157 @@ const SectionMateriels = () => {
           .main { max-width: 100%; padding: 16px; margin-left: 0; }
           .page-header { flex-direction: column; align-items: flex-start; gap: 12px; }
         }
+
+        /* ─── Modal ─── */
+        @keyframes modalFadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes modalPopIn {
+          from { opacity: 0; transform: translateY(14px) scale(0.96); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .modal-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(15, 23, 42, 0.55);
+          backdrop-filter: blur(4px);
+          -webkit-backdrop-filter: blur(4px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+          padding: 16px;
+          animation: modalFadeIn 0.15s ease-out;
+        }
+        .modal-card {
+          background: #ffffff;
+          border-radius: 20px;
+          width: 100%;
+          max-width: 460px;
+          max-height: 90vh;
+          overflow-y: auto;
+          box-shadow: 0 24px 60px -12px rgba(15, 23, 42, 0.35), 0 0 0 1px rgba(15, 23, 42, 0.04);
+          animation: modalPopIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .modal-header {
+          display: flex;
+          align-items: flex-start;
+          gap: 14px;
+          padding: 22px 24px 18px;
+          border-bottom: 1px solid #f1f5f9;
+        }
+        .modal-icon {
+          width: 40px;
+          height: 40px;
+          border-radius: 12px;
+          background: linear-gradient(135deg, #eff6ff, #dbeafe);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+          color: #2563eb;
+        }
+        .modal-icon svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+        .modal-header-text { flex: 1; padding-top: 2px; }
+        .modal-header h3 { font-size: 1.02rem; font-weight: 700; color: #0f172a; margin: 0; }
+        .modal-subtitle { font-size: 0.78rem; color: #94a3b8; margin-top: 3px; line-height: 1.4; }
+        .modal-close {
+          background: #f8fafc;
+          border: none;
+          width: 30px;
+          height: 30px;
+          border-radius: 8px;
+          font-size: 0.95rem;
+          color: #64748b;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+          transition: background 0.15s, color 0.15s;
+        }
+        .modal-close:hover { background: #e2e8f0; color: #0f172a; }
+        .modal-body { padding: 22px 24px 4px; }
+        .modal-field { margin-bottom: 16px; }
+        .modal-field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .modal-field label {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 0.72rem;
+          font-weight: 700;
+          color: #64748b;
+          margin-bottom: 7px;
+          letter-spacing: 0.03em;
+          text-transform: uppercase;
+        }
+        .modal-field label .optional-tag {
+          font-size: 0.68rem;
+          font-weight: 500;
+          text-transform: none;
+          letter-spacing: 0;
+          color: #cbd5e1;
+        }
+        .modal-field input,
+        .modal-field select,
+        .modal-field textarea {
+          width: 100%;
+          padding: 10px 13px;
+          border: 1.5px solid #e2e8f0;
+          border-radius: 10px;
+          font-size: 0.9rem;
+          font-family: inherit;
+          color: #0f172a;
+          background: #fafbfc;
+          box-sizing: border-box;
+          transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+        }
+        .modal-field input::placeholder,
+        .modal-field textarea::placeholder { color: #cbd5e1; }
+        .modal-field input:hover,
+        .modal-field select:hover,
+        .modal-field textarea:hover { border-color: #cbd5e1; }
+        .modal-field input:focus,
+        .modal-field select:focus,
+        .modal-field textarea:focus {
+          outline: none;
+          border-color: #2563eb;
+          box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+          background: #ffffff;
+        }
+        .modal-field textarea { resize: vertical; min-height: 60px; line-height: 1.5; }
+        .modal-error {
+          display: flex;
+          align-items: flex-start;
+          gap: 8px;
+          background: #fef2f2;
+          color: #b91c1c;
+          border: 1px solid #fecaca;
+          border-radius: 10px;
+          padding: 10px 13px;
+          font-size: 0.8rem;
+          line-height: 1.45;
+          margin-bottom: 16px;
+        }
+        .modal-footer {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          padding: 18px 24px 22px;
+        }
+        .modal-footer button {
+          padding: 10px 20px;
+          border-radius: 10px;
+          font-size: 0.85rem;
+          font-weight: 600;
+          cursor: pointer;
+          border: none;
+          transition: background 0.15s, transform 0.1s;
+        }
+        .modal-footer button:active { transform: scale(0.97); }
+        .modal-footer .btn-cancel { background: #f1f5f9; color: #475569; }
+        .modal-footer .btn-cancel:hover { background: #e2e8f0; }
+        .modal-footer .btn-save { background: #2563eb; color: #fff; box-shadow: 0 1px 2px rgba(37, 99, 235, 0.3); }
+        .modal-footer .btn-save:hover { background: #1d4ed8; }
+        .modal-footer .btn-save:disabled { opacity: 0.6; cursor: not-allowed; }
       `}</style>
 
       <div className="materiels-body">
@@ -441,7 +616,7 @@ const SectionMateriels = () => {
               <div>
                 <h1>Catalogue Matériels</h1>
                 <div className="sub">
-                  Gestion du stock — Section <span className="section-badge">{user?.section?.nom || 'N/A'}</span>
+                  Gestion du stock — Section <span className="section-badge">{sectionName}</span>
                 </div>
               </div>
               <div className="user-badge">
@@ -485,7 +660,7 @@ const SectionMateriels = () => {
               <button
                 className="btn-sm success"
                 style={{ padding: '8px 20px', marginLeft: 'auto' }}
-                onClick={handleAdd}
+                onClick={openAddModal}
               >
                 + Ajouter un matériel
               </button>
@@ -535,7 +710,7 @@ const SectionMateriels = () => {
                             <td className="actions-cell">
                               <button
                                 className="btn-sm outline"
-                                onClick={() => handleEdit(m.id, m.nom)}
+                                onClick={() => openEditModal(m)}
                               >
                                 ✏️
                               </button>
@@ -558,6 +733,82 @@ const SectionMateriels = () => {
           </main>
         </div>
       </div>
+
+      {modalOpen && (
+        <div className="modal-overlay" onClick={closeModal}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-icon">
+                <svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2" /><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" /></svg>
+              </div>
+              <div className="modal-header-text">
+                <h3>{modalMode === 'add' ? 'Nouveau matériel' : 'Modifier le matériel'}</h3>
+                <div className="modal-subtitle">
+                  {modalMode === 'add' ? 'Ajouter un type d\'équipement au catalogue' : 'Mettre à jour les informations de ce type d\'équipement'}
+                </div>
+              </div>
+              <button className="modal-close" onClick={closeModal} aria-label="Fermer">✕</button>
+            </div>
+            <form onSubmit={handleModalSubmit}>
+              <div className="modal-body">
+                {modalError && <div className="modal-error">{modalError}</div>}
+
+                <div className="modal-field">
+                  <label htmlFor="modal-nom">Nom</label>
+                  <input
+                    id="modal-nom"
+                    type="text"
+                    placeholder="Ex : Casque de chantier"
+                    value={modalForm.nom}
+                    onChange={(e) => setModalForm({ ...modalForm, nom: e.target.value })}
+                    required
+                  />
+                </div>
+
+                <div className="modal-field-row">
+                  <div className="modal-field">
+                    <label htmlFor="modal-categorie">Catégorie</label>
+                    <input
+                      id="modal-categorie"
+                      type="text"
+                      placeholder="Ex : Protection"
+                      value={modalForm.categorie}
+                      onChange={(e) => setModalForm({ ...modalForm, categorie: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="modal-field">
+                    <label htmlFor="modal-seuil">Seuil d'alerte</label>
+                    <input
+                      id="modal-seuil"
+                      type="number"
+                      min="0"
+                      value={modalForm.seuil_alerte}
+                      onChange={(e) => setModalForm({ ...modalForm, seuil_alerte: e.target.value })}
+                    />
+                  </div>
+                </div>
+
+                <div className="modal-field">
+                  <label htmlFor="modal-description">Description <span className="optional-tag">(optionnel)</span></label>
+                  <textarea
+                    id="modal-description"
+                    placeholder="Notes, spécifications techniques..."
+                    value={modalForm.description}
+                    onChange={(e) => setModalForm({ ...modalForm, description: e.target.value })}
+                  />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn-cancel" onClick={closeModal}>Annuler</button>
+                <button type="submit" className="btn-save" disabled={modalSaving}>
+                  {modalSaving ? 'Enregistrement...' : (modalMode === 'add' ? 'Ajouter' : 'Enregistrer')}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   );
 };

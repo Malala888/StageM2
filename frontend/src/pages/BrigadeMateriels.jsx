@@ -130,78 +130,10 @@ const BrigadeMateriels = () => {
     setEtat('');
   };
 
-  const handleAdd = async () => {
-    const nom = prompt('Nom du matériel:');
-    if (!nom) return;
-    const categorie = prompt('Catégorie:');
-    if (!categorie) return;
-    const seuil = parseInt(prompt('Seuil d\'alerte (nombre):') || '5');
-
-    try {
-      const { data } = await api.post('/materiaux/materiels/', {
-        nom,
-        categorie,
-        seuil_alerte: seuil
-      });
-      setMateriels([...materiels, data]);
-      setFilteredMateriels([...filteredMateriels, data]);
-      alert('✅ Matériel ajouté avec succès !');
-    } catch (err) {
-      alert('❌ Erreur lors de l\'ajout');
-      console.error(err);
-    }
-  };
-
-  const handleEdit = async (id, nom) => {
-    const newNom = prompt('Nouveau nom:', nom);
-    if (!newNom) return;
-
-    try {
-      const { data } = await api.patch(`/materiaux/materiels/${id}/`, {
-        nom: newNom
-      });
-      const updated = materiels.map(m => m.id === id ? data : m);
-      setMateriels(updated);
-      setFilteredMateriels(updated.filter(m => {
-        let result = true;
-        if (searchTerm.trim()) {
-          result = m.nom.toLowerCase().includes(searchTerm.toLowerCase());
-        }
-        if (categorie) {
-          result = result && m.categorie === categorie;
-        }
-        return result;
-      }));
-      alert('✅ Matériel modifié avec succès !');
-    } catch (err) {
-      alert('❌ Erreur lors de la modification');
-      console.error(err);
-    }
-  };
-
-  const handleDelete = async (id, nom) => {
-    if (!confirm(`Supprimer "${nom}" ?`)) return;
-
-    try {
-      await api.delete(`/materiaux/materiels/${id}/`);
-      const updated = materiels.filter(m => m.id !== id);
-      setMateriels(updated);
-      setFilteredMateriels(updated.filter(m => {
-        let result = true;
-        if (searchTerm.trim()) {
-          result = m.nom.toLowerCase().includes(searchTerm.toLowerCase());
-        }
-        if (categorie) {
-          result = result && m.categorie === categorie;
-        }
-        return result;
-      }));
-      alert('✅ Matériel supprimé avec succès !');
-    } catch (err) {
-      alert('❌ Erreur lors de la suppression');
-      console.error(err);
-    }
-  };
+  // Le Chef de Brigade consulte le catalogue mais ne le modifie pas : la gestion
+  // du catalogue global (types de matériel) reste au niveau Section/Service —
+  // le Chef de Brigade gère le stock et les mouvements de SA brigade, pas la
+  // définition des types d'équipement pour tout le système.
 
   return (
     <>
@@ -486,13 +418,6 @@ const BrigadeMateriels = () => {
               <button className="btn-sm outline" style={{ padding: '8px 20px' }} onClick={handleReset}>
                 Réinitialiser
               </button>
-              <button
-                className="btn-sm success"
-                style={{ padding: '8px 20px', marginLeft: 'auto' }}
-                onClick={handleAdd}
-              >
-                + Ajouter un matériel
-              </button>
             </div>
 
             {/* Tableau */}
@@ -506,13 +431,12 @@ const BrigadeMateriels = () => {
                       <th>Quantité</th>
                       <th>État</th>
                       <th>Seuil</th>
-                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredMateriels.length === 0 ? (
                       <tr>
-                        <td colSpan="6" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
+                        <td colSpan="5" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
                           Aucun matériel trouvé
                         </td>
                       </tr>
@@ -535,20 +459,6 @@ const BrigadeMateriels = () => {
                               <span className={`stock-badge ${stockStatut.class}`}>
                                 {stockStatut.label}
                               </span>
-                            </td>
-                            <td className="actions-cell">
-                              <button
-                                className="btn-sm outline"
-                                onClick={() => handleEdit(m.id, m.nom)}
-                              >
-                                ✏️
-                              </button>
-                              <button
-                                className="btn-sm danger"
-                                onClick={() => handleDelete(m.id, m.nom)}
-                              >
-                                🗑️
-                              </button>
                             </td>
                           </tr>
                         );

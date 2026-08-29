@@ -82,6 +82,22 @@ const SectionUsers = () => {
 
   const navigate = useNavigate();
 
+  // ─── Modal : modifier un utilisateur ───
+  const [userModalOpen, setUserModalOpen] = useState(false);
+  const [userModalSaving, setUserModalSaving] = useState(false);
+  const [userModalError, setUserModalError] = useState('');
+  const [userModalForm, setUserModalForm] = useState({ id: null, nom: '', prenom: '', email: '' });
+
+  // Reproduit côté frontend les règles hiérarchiques du backend (_user_can_validate) :
+  // un Chef de Section ne gère que les Chefs de Brigade de sa section (pas les GL/CN
+  // directement, ceux-là sont gérés par leur propre Chef de Brigade).
+  const canManage = (target) => {
+    if (!user) return false;
+    if (target.id === user.id) return true;
+    if (!user.section) return false;
+    return target.role === 'CHEF_BRIGADE' && target.section === user.section;
+  };
+
   // ─── États pour les filtres ───
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
@@ -129,12 +145,40 @@ const SectionUsers = () => {
     setStatusFilter('');
   };
 
-  const handleAddUser = () => {
-    alert('➕ Ajouter un nouvel agent');
+  const openEditUserModal = (u) => {
+    setUserModalError('');
+    setUserModalForm({ id: u.id, nom: u.nom, prenom: u.prenom, email: u.email });
+    setUserModalOpen(true);
   };
 
-  const handleEdit = (nom) => {
-    alert(`✏️ Modifier : ${nom}`);
+  const closeUserModal = () => {
+    if (userModalSaving) return;
+    setUserModalOpen(false);
+  };
+
+  const handleUserModalSubmit = async (e) => {
+    e.preventDefault();
+    if (!userModalForm.nom.trim() || !userModalForm.prenom.trim() || !userModalForm.email.trim()) {
+      setUserModalError('Tous les champs sont obligatoires.');
+      return;
+    }
+    setUserModalSaving(true);
+    setUserModalError('');
+    try {
+      const { data } = await api.patch(`/accounts/users/${userModalForm.id}/`, {
+        nom: userModalForm.nom.trim(),
+        prenom: userModalForm.prenom.trim(),
+        email: userModalForm.email.trim(),
+      });
+      setUsersList(prev => prev.map(item => item.id === data.id ? data : item));
+      clearSectionUsersCache();
+      setUserModalOpen(false);
+    } catch (err) {
+      const msg = err.response?.data?.error
+        || (err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de la modification');
+      setUserModalError(msg);
+      setUserModalSaving(false);
+    }
   };
 
   const handleDelete = async (id, nom) => {
@@ -144,7 +188,8 @@ const SectionUsers = () => {
       setUsersList(prev => prev.filter(u => u.id !== id));
       clearSectionUsersCache();
     } catch (err) {
-      alert('❌ Erreur lors de la suppression');
+      const msg = err.response?.data?.error || 'Erreur lors de la suppression';
+      alert(`❌ ${msg}`);
       console.error(err);
     }
   };
@@ -156,7 +201,8 @@ const SectionUsers = () => {
       setUsersList(prev => prev.map(u => u.id === id ? { ...u, statut: 'ACTIF' } : u));
       clearSectionUsersCache();
     } catch (err) {
-      alert('❌ Erreur lors de la validation');
+      const msg = err.response?.data?.error || 'Erreur lors de la validation';
+      alert(`❌ ${msg}`);
       console.error(err);
     }
   };
@@ -168,7 +214,8 @@ const SectionUsers = () => {
       setUsersList(prev => prev.map(u => u.id === id ? { ...u, statut: 'REJETE' } : u));
       clearSectionUsersCache();
     } catch (err) {
-      alert('❌ Erreur lors du rejet');
+      const msg = err.response?.data?.error || 'Erreur lors du rejet';
+      alert(`❌ ${msg}`);
       console.error(err);
     }
   };
@@ -400,6 +447,79 @@ const SectionUsers = () => {
           background: #fff;
           cursor: pointer;
         }
+
+        /* ─── Modal ─── */
+        .modal-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(15, 23, 42, 0.45);
+          backdrop-filter: blur(2px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+          padding: 16px;
+        }
+        .modal-card {
+          background: #ffffff;
+          border-radius: 16px;
+          width: 100%;
+          max-width: 460px;
+          max-height: 90vh;
+          overflow-y: auto;
+          box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+        }
+        .modal-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 18px 22px;
+          border-bottom: 1px solid #e2e8f0;
+        }
+        .modal-header h3 { font-size: 1rem; font-weight: 700; color: #0f172a; margin: 0; }
+        .modal-close {
+          background: none;
+          border: none;
+          font-size: 1.2rem;
+          color: #64748b;
+          cursor: pointer;
+          line-height: 1;
+          padding: 4px;
+        }
+        .modal-close:hover { color: #0f172a; }
+        .modal-body { padding: 20px 22px; }
+        .modal-field { margin-bottom: 14px; }
+        .modal-field label { display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 6px; }
+        .modal-field input {
+          width: 100%;
+          padding: 9px 12px;
+          border: 1px solid #cbd5e1;
+          border-radius: 8px;
+          font-size: 0.9rem;
+          box-sizing: border-box;
+        }
+        .modal-error {
+          background: #fef2f2;
+          color: #b91c1c;
+          border: 1px solid #fecaca;
+          border-radius: 8px;
+          padding: 8px 12px;
+          font-size: 0.82rem;
+          margin-bottom: 14px;
+        }
+        .modal-footer {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          padding: 16px 22px;
+          border-top: 1px solid #e2e8f0;
+        }
+        .modal-footer button { padding: 9px 18px; border-radius: 8px; font-size: 0.85rem; font-weight: 600; cursor: pointer; border: none; }
+        .modal-footer .btn-cancel { background: #f1f5f9; color: #334155; }
+        .modal-footer .btn-cancel:hover { background: #e2e8f0; }
+        .modal-footer .btn-save { background: #2563eb; color: #fff; }
+        .modal-footer .btn-save:hover { background: #1d4ed8; }
+        .modal-footer .btn-save:disabled { opacity: 0.6; cursor: not-allowed; }
       `}</style>
 
       <div className="users-body">
@@ -429,11 +549,7 @@ const SectionUsers = () => {
             <div className="card">
               <h3>
                 <span>Liste des agents ({filteredUsers.length})</span>
-                <span>
-                  <button className="btn-sm success" style={{ padding: '8px 16px' }} onClick={handleAddUser}>
-                    + Nouvel agent
-                  </button>
-                </span>
+                <span></span>
               </h3>
 
               <div className="filters">
@@ -517,7 +633,7 @@ const SectionUsers = () => {
                             <td>{brigadeName}</td>
                             <td><span className={`badge ${statusClass}`}>{u.statut}</span></td>
                             <td className="actions-cell">
-                              {u.statut === 'EN_ATTENTE' ? (
+                              {u.statut === 'EN_ATTENTE' && canManage(u) && (
                                 <>
                                   <button
                                     className="btn-sm success"
@@ -532,7 +648,8 @@ const SectionUsers = () => {
                                     Rejeter
                                   </button>
                                 </>
-                              ) : (
+                              )}
+                              {u.statut !== 'EN_ATTENTE' && canManage(u) && (
                                 <select
                                   className="status-select"
                                   defaultValue={u.statut}
@@ -543,7 +660,8 @@ const SectionUsers = () => {
                                       setUsersList(prev => prev.map(item => item.id === u.id ? { ...item, statut: newStatut } : item));
                                       clearSectionUsersCache();
                                     } catch (err) {
-                                      alert('❌ Erreur lors de la mise à jour');
+                                      const msg = err.response?.data?.error || 'Erreur lors de la mise à jour';
+                                      alert(`❌ ${msg}`);
                                     }
                                   }}
                                 >
@@ -552,8 +670,15 @@ const SectionUsers = () => {
                                   <option value="ARCHIVE">ARCHIVE</option>
                                 </select>
                               )}
-                              <button className="btn-sm outline" onClick={() => handleEdit(`${u.nom} ${u.prenom}`)}>✏️</button>
-                              <button className="btn-sm danger" onClick={() => handleDelete(u.id, `${u.nom} ${u.prenom}`)}>🗑️</button>
+                              {canManage(u) && (
+                                <>
+                                  <button className="btn-sm outline" onClick={() => openEditUserModal(u)}>✏️</button>
+                                  <button className="btn-sm danger" onClick={() => handleDelete(u.id, `${u.nom} ${u.prenom}`)}>🗑️</button>
+                                </>
+                              )}
+                              {!canManage(u) && u.id !== user?.id && (
+                                <span style={{ color: '#94a3b8', fontSize: '0.8rem' }}>—</span>
+                              )}
                             </td>
                           </tr>
                         );
@@ -567,6 +692,43 @@ const SectionUsers = () => {
           </main>
         </div>
       </div>
+
+      {userModalOpen && (
+        <div className="modal-overlay" onClick={closeUserModal}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>✏️ Modifier l'agent</h3>
+              <button className="modal-close" onClick={closeUserModal}>✕</button>
+            </div>
+            <form onSubmit={handleUserModalSubmit}>
+              <div className="modal-body">
+                {userModalError && <div className="modal-error">{userModalError}</div>}
+                <div className="modal-field">
+                  <label htmlFor="um-nom">Nom *</label>
+                  <input id="um-nom" type="text" value={userModalForm.nom}
+                    onChange={(e) => setUserModalForm({ ...userModalForm, nom: e.target.value })} required />
+                </div>
+                <div className="modal-field">
+                  <label htmlFor="um-prenom">Prénom *</label>
+                  <input id="um-prenom" type="text" value={userModalForm.prenom}
+                    onChange={(e) => setUserModalForm({ ...userModalForm, prenom: e.target.value })} required />
+                </div>
+                <div className="modal-field">
+                  <label htmlFor="um-email">Email *</label>
+                  <input id="um-email" type="email" value={userModalForm.email}
+                    onChange={(e) => setUserModalForm({ ...userModalForm, email: e.target.value })} required />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn-cancel" onClick={closeUserModal}>Annuler</button>
+                <button type="submit" className="btn-save" disabled={userModalSaving}>
+                  {userModalSaving ? 'Enregistrement...' : 'Enregistrer'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   );
 };

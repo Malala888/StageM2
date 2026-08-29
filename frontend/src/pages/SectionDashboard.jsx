@@ -63,8 +63,8 @@ async function fetchSectionDashboardData() {
   const activitesList = derniers.map((m, index) => ({
     id: m.id || index,
     type: m.type,
-    materiel: m.materiel ? m.materiel.nom : 'Matériel',
-    agent: m.agent_concerner ? `${m.agent_concerner.nom} ${m.agent_concerner.prenom}` : 'Système',
+    materiel: m.materiel_nom || 'Matériel',
+    agent: m.agent_concerner_nom || 'Système',
     date: new Date(m.date_mouvement).toLocaleDateString('fr-FR'),
     statut: m.statut,
   }));
@@ -73,6 +73,7 @@ async function fetchSectionDashboardData() {
     user: userData,
     section: section,
     sectionName,
+    brigades,
     stats: {
       agentsActifs: actifs.length,
       totalAgents: usersSection.length,
@@ -117,16 +118,20 @@ export function SectionDashboardError() {
 
 // ─── Composant principal ───
 const SectionDashboard = () => {
-  const { user, section, sectionName, stats, derniersMouvements, activites, comptesEnAttente } = useLoaderData();
+  const { user, section, sectionName, stats, derniersMouvements, activites, comptesEnAttente, brigades } = useLoaderData();
   const revalidator = useRevalidator();
 
-  // Fonction de validation hiérarchique (Chef de Section peut valider CHEF_BRIGADE, GL, CN de sa section)
+  const getBrigadeName = (brigadeId) => brigades.find(b => b.id === brigadeId)?.nom || 'N/A';
+
+  // Validation hiérarchique DIRECTE uniquement (cf. accounts/views.py _user_can_validate) :
+  // un Chef de Section ne valide que les Chefs de Brigade de sa section, pas les GL/CN
+  // directement (ceux-là sont validés par leur propre Chef de Brigade).
   const canValidate = (targetUser) => {
     if (!user) return false;
-    if (user.role === 'ADMIN') return true;
+    if (user.role === 'ADMIN') return targetUser.role === 'CHEF_SECTION';
     if (user.role === 'CHEF_SECTION') {
       if (!user.section) return false;
-      if (!['CHEF_BRIGADE', 'GL', 'CN'].includes(targetUser.role)) return false;
+      if (targetUser.role !== 'CHEF_BRIGADE') return false;
       return targetUser.section === user.section;
     }
     return false;
@@ -516,9 +521,9 @@ const SectionDashboard = () => {
                       {derniersMouvements.length > 0 ? (
                         derniersMouvements.map((mvt) => (
                           <tr key={mvt.id}>
-                            <td>{mvt.materiel?.nom || 'N/A'}</td>
+                            <td>{mvt.materiel_nom || 'N/A'}</td>
                             <td>{mvt.type}</td>
-                            <td>{mvt.agent_concerner ? `${mvt.agent_concerner.nom} ${mvt.agent_concerner.prenom}` : 'Système'}</td>
+                            <td>{mvt.agent_concerner_nom || 'Système'}</td>
                             <td>
                               <span className={`badge ${mvt.statut === 'EN_COURS' ? 'yellow' : mvt.statut === 'RETOURNE' ? 'green' : mvt.statut === 'EN_RETARD' ? 'red' : 'blue'}`}>
                                 {mvt.statut}
@@ -572,7 +577,7 @@ const SectionDashboard = () => {
                             <td>{targetUser.nom} {targetUser.prenom}</td>
                             <td>{targetUser.email}</td>
                             <td>{targetUser.role}</td>
-                            <td>{targetUser.brigade?.nom || 'N/A'}</td>
+                            <td>{getBrigadeName(targetUser.brigade)}</td>
                             <td>
                               {canValidateUser ? (
                                 <>
@@ -586,7 +591,7 @@ const SectionDashboard = () => {
                                         alert(`✅ ${targetUser.nom} ${targetUser.prenom} validé`);
                                       } catch (err) {
                                         console.error(err);
-                                        alert('❌ Erreur lors de la validation');
+                                        alert(`❌ ${err.response?.data?.error || 'Erreur lors de la validation'}`);
                                       }
                                     }}
                                   >
@@ -603,7 +608,7 @@ const SectionDashboard = () => {
                                         alert(`❌ ${targetUser.nom} ${targetUser.prenom} rejeté`);
                                       } catch (err) {
                                         console.error(err);
-                                        alert('❌ Erreur lors du rejet');
+                                        alert(`❌ ${err.response?.data?.error || 'Erreur lors du rejet'}`);
                                       }
                                     }}
                                   >
