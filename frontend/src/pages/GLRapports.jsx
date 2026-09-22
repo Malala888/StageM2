@@ -40,17 +40,18 @@ async function fetchGLRapportsData() {
   // --- Statistiques ---
   const totalEmprunts = mesMouvements.filter(m => m.type === 'EMPRUNT').length;
   const totalRetours = mesMouvements.filter(m => m.type === 'RETOUR').length;
-  const empruntsEnCours = mesMouvements.filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS').length;
+  // Un emprunt EN_RETARD est toujours un emprunt actif (matériel encore détenu)
+  const empruntsEnCours = mesMouvements.filter(m => m.type === 'EMPRUNT' && ['EN_COURS', 'EN_RETARD'].includes(m.statut)).length;
   const retards = mesMouvements.filter(m => m.statut === 'EN_RETARD').length;
-  const demandesEnAttente = mesMouvements.filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_ATTENTE').length;
+  const demandesEnAttente = mesMouvements.filter(m => m.type === 'EMPRUNT' && m.statut === 'DEMANDE').length;
 
   // Taux de retour (pour les emprunts qui ont un retour effectif)
   const empruntsAvecRetour = mesMouvements.filter(m => m.type === 'EMPRUNT' && m.date_retour_effective !== null);
   const tauxRetour = totalEmprunts > 0 ? Math.round((empruntsAvecRetour.length / totalEmprunts) * 100) : 0;
 
-  // Matériels actuellement assignés (en cours d'emprunt)
+  // Matériels actuellement assignés (effectivement détenus)
   const assignes = mesMouvements
-    .filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS')
+    .filter(m => m.type === 'EMPRUNT' && ['EN_COURS', 'EN_RETARD'].includes(m.statut))
     .map(m => {
       const mat = materielsData.find(mat => mat.id === m.materiel);
       return mat ? mat.nom : null;
@@ -59,7 +60,7 @@ async function fetchGLRapportsData() {
 
   // Nombre de matériels assignés (quantité totale)
   const nbMaterielsAssignes = mesMouvements
-    .filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS')
+    .filter(m => m.type === 'EMPRUNT' && ['EN_COURS', 'EN_RETARD'].includes(m.statut))
     .reduce((acc, m) => acc + m.quantite, 0);
 
   const result = {
@@ -122,20 +123,65 @@ const GLRapports = () => {
 
   const [periode, setPeriode] = useState('');
 
-  const handleGenerer = () => {
-    alert(`📊 Rapport généré !\nPériode: ${periode || 'Toutes'}\nBasé sur vos données personnelles.`);
+  const brigadeName = brigade?.nom || 'N/A';
+  const sectionName = section?.nom || 'N/A';
+
+  const handleGenerer = (e) => {
+    if (e) e.preventDefault();
+    alert('📊 Rapport à jour — il reflète vos données personnelles actuelles.');
   };
 
   const handleExportPDF = () => {
-    alert('📥 Export PDF en cours...');
+    const dateStr = new Date().toLocaleDateString('fr-FR');
+    const html = `
+      <html>
+        <head>
+          <title>Mon rapport - ${dateStr}</title>
+          <style>
+            body { font-family: Arial, sans-serif; padding: 30px; color: #0f172a; }
+            h1 { font-size: 20px; border-bottom: 2px solid #2563eb; padding-bottom: 8px; }
+            h2 { font-size: 15px; margin-top: 24px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+            th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
+            th { background: #f1f5f9; }
+            .meta { color: #64748b; font-size: 12px; margin-bottom: 16px; }
+          </style>
+        </head>
+        <body>
+          <h1>Mon rapport d'activité</h1>
+          <div class="meta">Généré le ${dateStr} — Brigade ${brigadeName} — Section ${sectionName}</div>
+          <table>
+            <tr><th>Total emprunts</th><td>${totalEmprunts}</td></tr>
+            <tr><th>Total retours</th><td>${totalRetours}</td></tr>
+            <tr><th>Emprunts en cours</th><td>${empruntsEnCours}</td></tr>
+            <tr><th>Demandes en attente</th><td>${demandesEnAttente}</td></tr>
+            <tr><th>Retards</th><td>${retards}</td></tr>
+            <tr><th>Taux de retour</th><td>${tauxRetour}%</td></tr>
+            <tr><th>Matériels détenus</th><td>${nbMaterielsAssignes}</td></tr>
+          </table>
+          <h2>Matériels actuellement détenus</h2>
+          <table>
+            <tr><th>Matériel</th></tr>
+            ${assignes.length ? assignes.map(n => `<tr><td>${n}</td></tr>`).join('') : '<tr><td>Aucun</td></tr>'}
+          </table>
+        </body>
+      </html>
+    `;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert('❌ Le navigateur a bloqué la fenêtre d\'impression. Autorisez les pop-ups pour ce site.');
+      return;
+    }
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => printWindow.print(), 300);
   };
 
   const handleCardClick = (titre, detail) => {
     alert(`📄 ${titre}\n${detail || ''}`);
   };
-
-  const brigadeName = brigade?.nom || 'N/A';
-  const sectionName = section?.nom || 'N/A';
 
   return (
     <>

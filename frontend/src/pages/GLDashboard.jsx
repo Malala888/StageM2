@@ -43,13 +43,15 @@ async function fetchGLDashboardData() {
   // Filtrer les mouvements où l'utilisateur est agent_concerner
   const mesMouvements = mouvementsData.filter(m => m.agent_concerner === userData.id);
 
-  // Statistiques
-  const mesEmpruntsEnCours = mesMouvements.filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS');
+  // Statistiques — un emprunt EN_RETARD est toujours un emprunt actif (le matériel
+  // est encore détenu par l'agent), il compte donc aussi comme "en cours".
+  const mesEmpruntsEnCours = mesMouvements.filter(m => m.type === 'EMPRUNT' && ['EN_COURS', 'EN_RETARD'].includes(m.statut));
   const mesRetards = mesMouvements.filter(m => m.statut === 'EN_RETARD');
+  const mesDemandes = mesMouvements.filter(m => m.statut === 'DEMANDE');
 
-  // Matériels assignés (ceux qui sont en cours d'emprunt)
+  // Matériels assignés (ceux qui sont effectivement détenus)
   const materielsAssignes = mesMouvements
-    .filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS')
+    .filter(m => m.type === 'EMPRUNT' && ['EN_COURS', 'EN_RETARD'].includes(m.statut))
     .map(m => {
       const mat = materielsData.find(mat => mat.id === m.materiel);
       return mat ? { ...mat, quantite: m.quantite, mouvement_id: m.id } : null;
@@ -74,6 +76,7 @@ async function fetchGLDashboardData() {
       materielsAssignes: materielsAssignes.length,
       empruntsEnCours: mesEmpruntsEnCours.length,
       retards: mesRetards.length,
+      demandes: mesDemandes.length,
     },
     derniersMouvements: derniers,
     activites: activitesList,
@@ -502,15 +505,15 @@ const GLDashboard = () => {
                     <tbody>
                       {derniersMouvements.length > 0 ? (
                         derniersMouvements.map((mvt) => {
-                          const mat = materielsAssignesList.find(m => m.mouvement_id === mvt.id)?.nom || mvt.materiel?.nom || 'N/A';
+                          const mat = mvt.materiel_nom || materielsAssignesList.find(m => m.mouvement_id === mvt.id)?.nom || 'N/A';
                           return (
                             <tr key={mvt.id}>
                               <td>{mat}</td>
                               <td>{mvt.type}</td>
                               <td>{new Date(mvt.date_mouvement).toLocaleDateString('fr-FR')}</td>
                               <td>
-                                <span className={`badge ${mvt.statut === 'EN_COURS' ? 'yellow' : mvt.statut === 'RETOURNE' ? 'green' : mvt.statut === 'EN_RETARD' ? 'red' : 'blue'}`}>
-                                  {mvt.statut}
+                                <span className={`badge ${mvt.statut === 'DEMANDE' ? 'yellow' : mvt.statut === 'EN_COURS' ? 'yellow' : mvt.statut === 'RETOURNE' ? 'green' : mvt.statut === 'EN_RETARD' || mvt.statut === 'REJETEE' ? 'red' : 'blue'}`}>
+                                  {{ DEMANDE: 'En attente', EN_COURS: 'En cours', RETOURNE: 'Retourné', EN_RETARD: 'En retard', REJETEE: 'Rejetée', PERDU: 'Perdu', ANNULE: 'Annulé' }[mvt.statut] || mvt.statut}
                                 </span>
                               </td>
                             </tr>

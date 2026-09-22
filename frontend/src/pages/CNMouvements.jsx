@@ -107,7 +107,7 @@ const CNMouvements = () => {
 
     if (searchTerm.trim()) {
       result = result.filter(m =>
-        (m.materiel?.nom || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (m.materiel_nom || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         m.numero.toLowerCase().includes(searchTerm.toLowerCase())
       );
     }
@@ -154,8 +154,6 @@ const CNMouvements = () => {
       quantite: parseInt(quantite),
       date_mouvement: date,
       date_retour_prevue: dateRetourPrevue.toISOString().split('T')[0],
-      agent_concerner: user.id,
-      brigade: user.brigade?.id || null,
       commentaire: motif,
     };
 
@@ -636,7 +634,7 @@ const CNMouvements = () => {
                         return (
                           <tr key={m.id}>
                             <td><strong>{m.numero}</strong></td>
-                            <td>{m.materiel?.nom || 'N/A'}</td>
+                            <td>{m.materiel_nom || 'N/A'}</td>
                             <td><span className={`type-badge ${typeClass}`}>{m.type}</span></td>
                             <td>{new Date(m.date_mouvement).toLocaleDateString('fr-FR')}</td>
                             <td><span className={`badge ${statutClass}`}>{m.statut}</span></td>

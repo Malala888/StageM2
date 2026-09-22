@@ -87,6 +87,7 @@ const GLMouvements = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('');
   const [filterDate, setFilterDate] = useState('');
+  const [mouvements, setMouvements] = useState(initialMouvements);
   const [filteredMouvements, setFilteredMouvements] = useState(initialMouvements);
 
   // ─── États pour la soumission ───
@@ -107,11 +108,11 @@ const GLMouvements = () => {
 
   // ─── Appliquer les filtres ───
   useEffect(() => {
-    let result = initialMouvements;
+    let result = mouvements;
 
     if (searchTerm.trim()) {
       result = result.filter(m =>
-        (m.materiel?.nom || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (m.materiel_nom || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         m.numero.toLowerCase().includes(searchTerm.toLowerCase())
       );
     }
@@ -125,7 +126,7 @@ const GLMouvements = () => {
     }
 
     setFilteredMouvements(result);
-  }, [searchTerm, filterType, filterDate, initialMouvements]);
+  }, [searchTerm, filterType, filterDate, mouvements]);
 
   // ─── Handlers ───
   const handleFilter = (e) => {
@@ -159,14 +160,13 @@ const GLMouvements = () => {
       quantite: parseInt(quantite),
       date_mouvement: date,
       date_retour_prevue: dateRetourPrevue.toISOString().split('T')[0],
-      agent_concerner: user.id,
-      brigade: user.brigade?.id || null,
       commentaire: motif,
+      // agent_concerner, brigade et statut (toujours DEMANDE) sont forcés côté serveur
     };
 
     try {
       await api.post('/materiaux/mouvements/', payload);
-      alert('✅ Demande d\'emprunt envoyée avec succès !');
+      alert('✅ Demande d\'emprunt envoyée — en attente de validation par votre Chef de Brigade.');
       setMateriel('');
       setQuantite(1);
       setDuree(1);
@@ -174,10 +174,12 @@ const GLMouvements = () => {
 
       // Recharger les mouvements
       const { data: newMouvements } = await api.get('/materiaux/mouvements/');
-      setFilteredMouvements(newMouvements.filter(m => m.agent_concerner === user.id));
+      setMouvements(newMouvements);
     } catch (err) {
       console.error(err);
-      setSubmitError('Erreur lors de l\'envoi de la demande.');
+      const msg = err.response?.data?.error
+        || (err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de l\'envoi de la demande.');
+      setSubmitError(msg);
     } finally {
       setSubmitting(false);
     }
@@ -185,6 +187,19 @@ const GLMouvements = () => {
 
   const handleDetail = (numero) => {
     alert(`📄 Détail du mouvement : ${numero}`);
+  };
+
+  // Annuler une demande encore en attente (autorisé côté backend tant que statut === DEMANDE)
+  const handleAnnuler = async (id, numero) => {
+    if (!confirm(`Annuler la demande "${numero}" ?`)) return;
+    try {
+      await api.delete(`/materiaux/mouvements/${id}/`);
+      setMouvements(prev => prev.filter(m => m.id !== id));
+      alert('✅ Demande annulée');
+    } catch (err) {
+      const msg = err.response?.data?.error || 'Erreur lors de l\'annulation';
+      alert(`❌ ${msg}`);
+    }
   };
 
   const brigadeName = user?.brigade?.nom || 'N/A';
@@ -632,22 +647,37 @@ const GLMouvements = () => {
                         }[m.type] || '';
 
                         const statutClass = {
+                          'DEMANDE': 'yellow',
                           'EN_COURS': 'yellow',
                           'RETOURNE': 'green',
                           'EN_RETARD': 'red',
+                          'REJETEE': 'red',
                           'PERDU': 'red',
                           'ANNULE': 'gray',
                         }[m.statut] || 'gray';
 
+                        const statutLabel = {
+                          'DEMANDE': 'En attente',
+                          'EN_COURS': 'En cours',
+                          'RETOURNE': 'Retourné',
+                          'EN_RETARD': 'En retard',
+                          'REJETEE': 'Rejetée',
+                          'PERDU': 'Perdu',
+                          'ANNULE': 'Annulé',
+                        }[m.statut] || m.statut;
+
                         return (
                           <tr key={m.id}>
                             <td><strong>{m.numero}</strong></td>
-                            <td>{m.materiel?.nom || 'N/A'}</td>
+                            <td>{m.materiel_nom || 'N/A'}</td>
                             <td><span className={`type-badge ${typeClass}`}>{m.type}</span></td>
                             <td>{new Date(m.date_mouvement).toLocaleDateString('fr-FR')}</td>
-                            <td><span className={`badge ${statutClass}`}>{m.statut}</span></td>
+                            <td><span className={`badge ${statutClass}`}>{statutLabel}</span></td>
                             <td className="actions-cell">
                               <button className="btn-sm outline" onClick={() => handleDetail(m.numero)}>📄 Détail</button>
+                              {m.statut === 'DEMANDE' && (
+                                <button className="btn-sm danger" onClick={() => handleAnnuler(m.id, m.numero)}>Annuler</button>
+                              )}
                             </td>
                           </tr>
                         );

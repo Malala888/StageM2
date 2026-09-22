@@ -2,6 +2,40 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
+import MessageModal from '../components/MessageModal';
+
+// URL de base de l'API. En production, définir VITE_API_URL dans le .env
+// plutôt que de laisser l'adresse locale en dur.
+const API_BASE = import.meta.env?.VITE_API_URL || 'http://127.0.0.1:8000/api';
+
+// Traduit une erreur DRF en message lisible par l'utilisateur
+const extractErrorMessage = (err, fallback) => {
+  const data = err.response?.data;
+  if (!data) return fallback;
+  if (typeof data === 'string') return data;
+  if (data.error) return data.error;
+  if (data.detail) return data.detail;
+
+  const labels = {
+    email: 'Email',
+    nom: 'Nom',
+    prenom: 'Prénom',
+    password: 'Mot de passe',
+    role: 'Rôle',
+    section: 'Section',
+    brigade: 'Brigade',
+  };
+  const messages = Object.entries(data).map(([field, val]) => {
+    const text = Array.isArray(val) ? val.join(' ') : String(val);
+    if (field === 'non_field_errors') return text;
+    // Message le plus fréquent, rendu plus clair
+    if (field === 'email' && text.toLowerCase().includes('exist')) {
+      return 'Cette adresse email est déjà utilisée par un autre compte.';
+    }
+    return `${labels[field] || field} : ${text}`;
+  });
+  return messages.length ? messages.join('\n') : fallback;
+};
 
 const Register = () => {
   const navigate = useNavigate();
@@ -17,8 +51,7 @@ const Register = () => {
   const [passwordConfirm, setPasswordConfirm] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState('');
-  const [submitSuccess, setSubmitSuccess] = useState('');
+  const [message, setMessage] = useState(null); // popup succès / erreur
 
   // ─── Données dynamiques ───
   const [sections, setSections] = useState([]);
@@ -39,13 +72,19 @@ const Register = () => {
     const fetchData = async () => {
       try {
         const [sectionsRes, brigadesRes] = await Promise.all([
-          axios.get('http://127.0.0.1:8000/api/personnel/sections/'),
-          axios.get('http://127.0.0.1:8000/api/personnel/brigades/'),
+          axios.get(`${API_BASE}/personnel/sections/`),
+          axios.get(`${API_BASE}/personnel/brigades/`),
         ]);
         setSections(sectionsRes.data);
         setBrigades(brigadesRes.data);
       } catch (err) {
         console.error('Erreur de chargement des données:', err);
+        // Sans sections/brigades, le formulaire est inutilisable : on prévient.
+        setMessage({
+          type: 'error',
+          title: 'Chargement impossible',
+          text: "Impossible de charger la liste des sections et brigades. Vérifiez votre connexion et réessayez.",
+        });
       } finally {
         setLoading(false);
       }
@@ -96,27 +135,30 @@ const Register = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setSubmitError('');
-    setSubmitSuccess('');
-    setIsSubmitting(true);
+    setMessage(null);
 
     if (!role) {
-      setSubmitError('❌ Veuillez sélectionner un poste');
-      setIsSubmitting(false);
+      setMessage({ type: 'error', text: 'Veuillez sélectionner un poste.' });
       return;
     }
-
+    if (role === 'CHEF_SECTION' && !section) {
+      setMessage({ type: 'error', text: 'Veuillez sélectionner votre section.' });
+      return;
+    }
+    if (role !== 'CHEF_SECTION' && !brigade) {
+      setMessage({ type: 'error', text: 'Veuillez sélectionner votre brigade.' });
+      return;
+    }
     if (password !== passwordConfirm) {
-      setSubmitError('Les mots de passe ne correspondent pas');
-      setIsSubmitting(false);
+      setMessage({ type: 'error', text: 'Les mots de passe ne correspondent pas.' });
+      return;
+    }
+    if (password.length < 8) {
+      setMessage({ type: 'error', text: 'Le mot de passe doit contenir au moins 8 caractères.' });
       return;
     }
 
-    if (password.length < 8) {
-      setSubmitError('Le mot de passe doit contenir au moins 8 caractères');
-      setIsSubmitting(false);
-      return;
-    }
+    setIsSubmitting(true);
 
     let sectionId = null;
     if (role === 'CHEF_SECTION' && section) {
@@ -136,11 +178,11 @@ const Register = () => {
       section: sectionId,
       brigade: (role !== 'CHEF_SECTION' && brigade) ? parseInt(brigade) : null,
       password,
+      // Le statut est toujours forcé à EN_ATTENTE côté serveur : inutile de l'envoyer.
     };
 
     try {
-      await axios.post('http://127.0.0.1:8000/api/accounts/users/', payload);
-      setSubmitSuccess('✅ Votre compte a été créé avec succès ! En attente de validation par votre supérieur.');
+      await axios.post(`${API_BASE}/accounts/users/`, payload);
       setNom('');
       setPrenom('');
       setEmail('');
@@ -154,21 +196,16 @@ const Register = () => {
       setStrengthLabel('');
       const bars = [s1Ref.current, s2Ref.current, s3Ref.current, s4Ref.current];
       bars.forEach(bar => { if (bar) bar.style.background = '#e2e8f0'; });
-      setTimeout(() => navigate('/'), 4000);
+
+      setMessage({
+        type: 'success',
+        title: 'Compte créé',
+        text: 'Votre compte a bien été créé. Il est en attente de validation par votre supérieur hiérarchique. Vous pourrez vous connecter une fois validé.',
+        onClose: () => navigate('/'),
+      });
     } catch (err) {
       console.error(err);
-      const errorData = err.response?.data;
-      let errorMsg = 'Erreur lors de la création du compte';
-      if (errorData) {
-        if (typeof errorData === 'string') {
-          errorMsg = errorData;
-        } else if (typeof errorData === 'object') {
-          errorMsg = Object.entries(errorData)
-            .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : value}`)
-            .join(' | ');
-        }
-      }
-      setSubmitError(`❌ ${errorMsg}`);
+      setMessage({ type: 'error', text: extractErrorMessage(err, 'Erreur lors de la création du compte.') });
     } finally {
       setIsSubmitting(false);
     }
@@ -180,6 +217,7 @@ const Register = () => {
         <div className="card" style={{ textAlign: 'center', padding: '40px' }}>
           <p>Chargement du formulaire...</p>
         </div>
+        <MessageModal message={message} onClose={() => setMessage(null)} />
       </div>
     );
   }
@@ -468,8 +506,6 @@ const Register = () => {
             </div>
           </div>
 
-          {submitError && <div className="alert error">{submitError}</div>}
-          {submitSuccess && <div className="alert success">{submitSuccess}</div>}
 
           <form onSubmit={handleSubmit}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
@@ -713,6 +749,8 @@ const Register = () => {
           </p>
         </main>
       </div>
+
+      <MessageModal message={message} onClose={() => setMessage(null)} />
     </>
   );
 };

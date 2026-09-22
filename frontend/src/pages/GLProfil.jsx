@@ -59,20 +59,38 @@ export function GLProfilError() {
 const GLProfil = () => {
   const { user: initialUser } = useLoaderData();
 
+  // ─── État utilisateur (réactif, plus de mutation directe de l'objet du loader) ───
+  const [user, setUser] = useState(initialUser);
+
   const [nom, setNom] = useState(initialUser?.nom || '');
   const [prenom, setPrenom] = useState(initialUser?.prenom || '');
   const [email, setEmail] = useState(initialUser?.email || '');
-  const [telephone, setTelephone] = useState('');
   const [updateSuccess, setUpdateSuccess] = useState('');
   const [updateError, setUpdateError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const brigadeName = initialUser?.brigade?.nom || 'N/A';
-  const sectionName = initialUser?.section?.nom || 'N/A';
-  const statut = initialUser?.statut || 'ACTIF';
-  const dateInscription = initialUser?.date_inscription
-    ? new Date(initialUser.date_inscription).toLocaleDateString('fr-FR')
+  const brigadeName = user?.brigade?.nom || 'N/A';
+  const sectionName = user?.section?.nom || 'N/A';
+  const statut = user?.statut || '—';
+  const dateInscription = user?.date_inscription
+    ? new Date(user.date_inscription).toLocaleDateString('fr-FR')
     : 'N/A';
+
+  // ─── Extraction propre du message d'erreur renvoyé par l'API ───
+  const extractErrorMessage = (err, fallback) => {
+    const data = err.response?.data;
+    if (!data) return fallback;
+    if (data.error) return data.error;
+    if (data.detail) return data.detail;
+    if (typeof data === 'object') {
+      const messages = Object.entries(data).map(([field, val]) => {
+        const text = Array.isArray(val) ? val.join(' ') : val;
+        return field === 'non_field_errors' ? text : `${field} : ${text}`;
+      });
+      if (messages.length) return messages.join(' — ');
+    }
+    return fallback;
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -82,15 +100,14 @@ const GLProfil = () => {
 
     try {
       const payload = { nom, prenom, email };
-      await api.patch(`/accounts/users/${initialUser.id}/`, payload);
+      const { data: updatedUser } = await api.patch(`/accounts/users/${user.id}/`, payload);
+      // Le PATCH renvoie brigade/section sous forme d'ID : on conserve les objets
+      // enrichis par le loader pour que l'affichage reste correct.
+      setUser(prev => ({ ...prev, ...updatedUser, brigade: prev.brigade, section: prev.section }));
       setUpdateSuccess('✅ Profil mis à jour avec succès !');
-      initialUser.nom = nom;
-      initialUser.prenom = prenom;
-      initialUser.email = email;
     } catch (err) {
       console.error(err);
-      const msg = err.response?.data?.detail || err.response?.data?.message || 'Erreur lors de la mise à jour du profil';
-      setUpdateError(`❌ ${msg}`);
+      setUpdateError(`❌ ${extractErrorMessage(err, 'Erreur lors de la mise à jour du profil')}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -353,9 +370,9 @@ const GLProfil = () => {
                 <div className="sub">Informations personnelles — <span className="role-badge">GL</span></div>
               </div>
               <div className="user-badge">
-                <div className="avatar">{initialUser?.prenom?.[0] || 'G'}</div>
+                <div className="avatar">{user?.prenom?.[0] || 'G'}</div>
                 <div>
-                  <div className="name">{initialUser?.prenom || 'Garde'} {initialUser?.nom || 'Ligne'}</div>
+                  <div className="name">{user?.prenom || ''} {user?.nom || ''}</div>
                   <div className="role">Garde Ligne • {brigadeName}</div>
                 </div>
               </div>
@@ -363,9 +380,9 @@ const GLProfil = () => {
 
             <div className="card">
               <div className="profile-header">
-                <div className="avatar-large">{initialUser?.prenom?.[0] || 'G'}{initialUser?.nom?.[0] || 'L'}</div>
+                <div className="avatar-large">{user?.prenom?.[0] || 'G'}{user?.nom?.[0] || 'L'}</div>
                 <div className="info">
-                  <h2>{initialUser?.prenom || 'Garde'} {initialUser?.nom || 'Ligne'}</h2>
+                  <h2>{user?.prenom || ''} {user?.nom || ''}</h2>
                   <p>Garde Ligne (GL) • Brigade {brigadeName} • Section {sectionName}</p>
                   <p style={{ fontSize: '0.85rem', color: '#94a3b8' }}>
                     Compte validé le {dateInscription} • {statut}
@@ -389,10 +406,6 @@ const GLProfil = () => {
                   <div className="field">
                     <label htmlFor="email">Email</label>
                     <input type="email" id="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-                  </div>
-                  <div className="field">
-                    <label htmlFor="telephone">Téléphone</label>
-                    <input type="text" id="telephone" value={telephone} onChange={(e) => setTelephone(e.target.value)} placeholder="+261 XX XXX XX XX" />
                   </div>
                   <div className="field">
                     <label>Poste</label>

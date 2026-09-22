@@ -40,9 +40,9 @@ async function fetchCNRapportsData() {
   // --- Statistiques ---
   const totalEmprunts = mesMouvements.filter(m => m.type === 'EMPRUNT').length;
   const totalRetours = mesMouvements.filter(m => m.type === 'RETOUR').length;
-  const empruntsEnCours = mesMouvements.filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS').length;
+  const empruntsEnCours = mesMouvements.filter(m => m.type === 'EMPRUNT' && ['EN_COURS', 'EN_RETARD'].includes(m.statut)).length;
   const retards = mesMouvements.filter(m => m.statut === 'EN_RETARD').length;
-  const demandesEnAttente = mesMouvements.filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_ATTENTE').length;
+  const demandesEnAttente = mesMouvements.filter(m => m.type === 'EMPRUNT' && m.statut === 'DEMANDE').length;
 
   // Taux de retour (pour les emprunts qui ont un retour effectif)
   const empruntsAvecRetour = mesMouvements.filter(m => m.type === 'EMPRUNT' && m.date_retour_effective !== null);
@@ -50,7 +50,7 @@ async function fetchCNRapportsData() {
 
   // Matériels actuellement assignés (en cours d'emprunt)
   const assignes = mesMouvements
-    .filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS')
+    .filter(m => m.type === 'EMPRUNT' && ['EN_COURS', 'EN_RETARD'].includes(m.statut))
     .map(m => {
       const mat = materielsData.find(mat => mat.id === m.materiel);
       return mat ? mat.nom : null;
@@ -59,7 +59,7 @@ async function fetchCNRapportsData() {
 
   // Nombre de matériels assignés (quantité totale)
   const nbMaterielsAssignes = mesMouvements
-    .filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS')
+    .filter(m => m.type === 'EMPRUNT' && ['EN_COURS', 'EN_RETARD'].includes(m.statut))
     .reduce((acc, m) => acc + m.quantite, 0);
 
   const result = {

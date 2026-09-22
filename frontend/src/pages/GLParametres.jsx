@@ -15,11 +15,15 @@ async function fetchGLParametresData() {
     return glParametresCache;
   }
 
-  const [{ data: userData }] = await Promise.all([
+  const [{ data: userData }, { data: brigadesData }] = await Promise.all([
     api.get('/accounts/users/me/'),
+    api.get('/personnel/brigades/'),
   ]);
 
-  const result = { user: userData };
+  const result = {
+    user: userData,
+    brigadeName: brigadesData.find(b => b.id === userData.brigade)?.nom || 'N/A',
+  };
   glParametresCache = result;
   glParametresCacheTime = now;
   return result;
@@ -47,7 +51,7 @@ export function GLParametresError() {
 }
 
 const GLParametres = () => {
-  const { user: initialUser } = useLoaderData();
+  const { user: initialUser, brigadeName } = useLoaderData();
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -56,7 +60,6 @@ const GLParametres = () => {
   const [updateError, setUpdateError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const brigadeName = initialUser?.brigade?.nom || 'N/A';
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -87,7 +90,7 @@ const GLParametres = () => {
       setConfirmPassword('');
     } catch (err) {
       console.error(err);
-      const msg = err.response?.data?.detail || 'Erreur lors du changement de mot de passe';
+      const msg = err.response?.data?.error || err.response?.data?.detail || 'Erreur lors du changement de mot de passe';
       setUpdateError(`❌ ${msg}`);
     } finally {
       setIsSubmitting(false);

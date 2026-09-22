@@ -237,6 +237,30 @@ const BrigadeMouvements = () => {
     alert(`📄 Détail du mouvement : ${numero}`);
   };
 
+  // ─── Valider / rejeter une demande d'emprunt envoyée par un GL/CN ───
+  const handleValiderDemande = async (id, numero) => {
+    try {
+      await api.patch(`/materiaux/mouvements/${id}/valider_demande/`);
+      setMouvements(prev => prev.map(m => m.id === id ? { ...m, statut: 'EN_COURS' } : m));
+      alert(`✅ Demande ${numero} validée`);
+    } catch (err) {
+      const msg = err.response?.data?.error || 'Erreur lors de la validation';
+      alert(`❌ ${msg}`);
+    }
+  };
+
+  const handleRejeterDemande = async (id, numero) => {
+    if (!confirm(`Rejeter la demande ${numero} ?`)) return;
+    try {
+      await api.patch(`/materiaux/mouvements/${id}/rejeter_demande/`);
+      setMouvements(prev => prev.map(m => m.id === id ? { ...m, statut: 'REJETEE' } : m));
+      alert(`❌ Demande ${numero} rejetée`);
+    } catch (err) {
+      const msg = err.response?.data?.error || 'Erreur lors du rejet';
+      alert(`❌ ${msg}`);
+    }
+  };
+
   // ─── Rendu ───
   return (
     <>
@@ -758,12 +782,24 @@ const BrigadeMouvements = () => {
                         }[m.type] || '';
 
                         const statutClass = {
+                          'DEMANDE': 'yellow',
                           'EN_COURS': 'yellow',
                           'RETOURNE': 'green',
                           'EN_RETARD': 'red',
+                          'REJETEE': 'red',
                           'PERDU': 'red',
                           'ANNULE': 'gray',
                         }[m.statut] || 'gray';
+
+                        const statutLabel = {
+                          'DEMANDE': '⏳ Demande',
+                          'EN_COURS': 'En cours',
+                          'RETOURNE': 'Retourné',
+                          'EN_RETARD': 'En retard',
+                          'REJETEE': 'Rejetée',
+                          'PERDU': 'Perdu',
+                          'ANNULE': 'Annulé',
+                        }[m.statut] || m.statut;
 
                         return (
                           <tr key={m.id}>
@@ -772,8 +808,14 @@ const BrigadeMouvements = () => {
                             <td><span className={`type-badge ${typeClass}`}>{m.type}</span></td>
                             <td>{m.agent_concerner_nom || '—'}</td>
                             <td>{new Date(m.date_mouvement).toLocaleDateString('fr-FR')}</td>
-                            <td><span className={`badge ${statutClass}`}>{m.statut}</span></td>
+                            <td><span className={`badge ${statutClass}`}>{statutLabel}</span></td>
                             <td className="actions-cell">
+                              {m.statut === 'DEMANDE' && (
+                                <>
+                                  <button className="btn-sm success" onClick={() => handleValiderDemande(m.id, m.numero)}>Valider</button>
+                                  <button className="btn-sm danger" onClick={() => handleRejeterDemande(m.id, m.numero)}>Rejeter</button>
+                                </>
+                              )}
                               <button className="btn-sm outline" onClick={() => handleDetail(m.numero)}>📄 Détail</button>
                             </td>
                           </tr>

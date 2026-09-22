@@ -60,21 +60,39 @@ export function CNProfilError() {
 const CNProfil = () => {
   const { user: initialUser } = useLoaderData();
 
+  // ─── État utilisateur (réactif, plus de mutation directe de l'objet du loader) ───
+  const [user, setUser] = useState(initialUser);
+
   // ─── États du formulaire ───
   const [nom, setNom] = useState(initialUser?.nom || '');
   const [prenom, setPrenom] = useState(initialUser?.prenom || '');
   const [email, setEmail] = useState(initialUser?.email || '');
-  const [telephone, setTelephone] = useState('');
   const [updateSuccess, setUpdateSuccess] = useState('');
   const [updateError, setUpdateError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const brigadeName = initialUser?.brigade?.nom || 'N/A';
-  const sectionName = initialUser?.section?.nom || 'N/A';
-  const statut = initialUser?.statut || 'ACTIF';
-  const dateInscription = initialUser?.date_inscription
-    ? new Date(initialUser.date_inscription).toLocaleDateString('fr-FR')
+  const brigadeName = user?.brigade?.nom || 'N/A';
+  const sectionName = user?.section?.nom || 'N/A';
+  const statut = user?.statut || '—';
+  const dateInscription = user?.date_inscription
+    ? new Date(user.date_inscription).toLocaleDateString('fr-FR')
     : 'N/A';
+
+  // ─── Extraction propre du message d'erreur renvoyé par l'API ───
+  const extractErrorMessage = (err, fallback) => {
+    const data = err.response?.data;
+    if (!data) return fallback;
+    if (data.error) return data.error;
+    if (data.detail) return data.detail;
+    if (typeof data === 'object') {
+      const messages = Object.entries(data).map(([field, val]) => {
+        const text = Array.isArray(val) ? val.join(' ') : val;
+        return field === 'non_field_errors' ? text : `${field} : ${text}`;
+      });
+      if (messages.length) return messages.join(' — ');
+    }
+    return fallback;
+  };
 
   // ─── Handlers ───
   const handleSubmit = async (e) => {
@@ -85,15 +103,14 @@ const CNProfil = () => {
 
     try {
       const payload = { nom, prenom, email };
-      await api.patch(`/accounts/users/${initialUser.id}/`, payload);
+      const { data: updatedUser } = await api.patch(`/accounts/users/${user.id}/`, payload);
+      // Le PATCH renvoie brigade/section sous forme d'ID : on conserve les objets
+      // enrichis par le loader pour que l'affichage reste correct.
+      setUser(prev => ({ ...prev, ...updatedUser, brigade: prev.brigade, section: prev.section }));
       setUpdateSuccess('✅ Profil mis à jour avec succès !');
-      initialUser.nom = nom;
-      initialUser.prenom = prenom;
-      initialUser.email = email;
     } catch (err) {
       console.error(err);
-      const msg = err.response?.data?.detail || err.response?.data?.message || 'Erreur lors de la mise à jour du profil';
-      setUpdateError(`❌ ${msg}`);
+      setUpdateError(`❌ ${extractErrorMessage(err, 'Erreur lors de la mise à jour du profil')}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -367,9 +384,9 @@ const CNProfil = () => {
                 </div>
               </div>
               <div className="user-badge">
-                <div className="avatar">{initialUser?.prenom?.[0] || 'C'}</div>
+                <div className="avatar">{user?.prenom?.[0] || 'C'}</div>
                 <div>
-                  <div className="name">{initialUser?.prenom || 'Cantonnier'} {initialUser?.nom || ''}</div>
+                  <div className="name">{user?.prenom || ''} {user?.nom || ''}</div>
                   <div className="role">Cantonnier • {brigadeName}</div>
                 </div>
               </div>
@@ -377,9 +394,9 @@ const CNProfil = () => {
 
             <div className="card">
               <div className="profile-header">
-                <div className="avatar-large">{initialUser?.prenom?.[0] || 'C'}{initialUser?.nom?.[0] || 'N'}</div>
+                <div className="avatar-large">{user?.prenom?.[0] || 'C'}{user?.nom?.[0] || 'N'}</div>
                 <div className="info">
-                  <h2>{initialUser?.prenom || 'Cantonnier'} {initialUser?.nom || ''}</h2>
+                  <h2>{user?.prenom || ''} {user?.nom || ''}</h2>
                   <p>Cantonnier (CN) • Brigade {brigadeName} • Section {sectionName}</p>
                   <p style={{ fontSize: '0.85rem', color: '#94a3b8' }}>
                     Compte validé le {dateInscription} • {statut}
@@ -420,16 +437,6 @@ const CNProfil = () => {
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       required
-                    />
-                  </div>
-                  <div className="field">
-                    <label htmlFor="telephone">Téléphone</label>
-                    <input
-                      type="text"
-                      id="telephone"
-                      value={telephone}
-                      onChange={(e) => setTelephone(e.target.value)}
-                      placeholder="+261 XX XXX XX XX"
                     />
                   </div>
                   <div className="field">

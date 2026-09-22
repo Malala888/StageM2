@@ -38,12 +38,13 @@ async function fetchCNDashboardData() {
   const mesMouvements = mouvementsData.filter(m => m.agent_concerner === userData.id);
 
   // Statistiques
-  const mesEmpruntsEnCours = mesMouvements.filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS');
+  const mesEmpruntsEnCours = mesMouvements.filter(m => m.type === 'EMPRUNT' && ['EN_COURS', 'EN_RETARD'].includes(m.statut));
+  const mesDemandes = mesMouvements.filter(m => m.statut === 'DEMANDE');
   const mesRetards = mesMouvements.filter(m => m.statut === 'EN_RETARD');
 
   // Matériels assignés (ceux qui sont en cours d'emprunt)
   const materielsAssignes = mesMouvements
-    .filter(m => m.type === 'EMPRUNT' && m.statut === 'EN_COURS')
+    .filter(m => m.type === 'EMPRUNT' && ['EN_COURS', 'EN_RETARD'].includes(m.statut))
     .map(m => {
       const mat = materielsData.find(mat => mat.id === m.materiel);
       return mat ? { ...mat, quantite: m.quantite, mouvement_id: m.id } : null;
@@ -494,7 +495,7 @@ const CNDashboard = () => {
                     <tbody>
                       {derniersMouvements.length > 0 ? (
                         derniersMouvements.map((mvt) => {
-                          const mat = materielsAssignesList.find(m => m.mouvement_id === mvt.id)?.nom || mvt.materiel?.nom || 'N/A';
+                          const mat = mvt.materiel_nom || materielsAssignesList.find(m => m.mouvement_id === mvt.id)?.nom || 'N/A';
                           return (
                             <tr key={mvt.id}>
                               <td>{mat}</td>

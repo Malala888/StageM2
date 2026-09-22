@@ -2,23 +2,28 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
+import MessageModal from '../components/MessageModal';
+
+// URL de base de l'API. En production, définir VITE_API_URL dans le .env
+// plutôt que de laisser l'adresse locale en dur.
+const API_BASE = import.meta.env?.VITE_API_URL || 'http://127.0.0.1:8000/api';
 
 const Login = () => {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
-    const [error, setError] = useState('');
+    const [message, setMessage] = useState(null); // popup d'erreur
     const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        setError('');
+        setMessage(null);
         setLoading(true);
 
         try {
             // 1. Obtenir les tokens JWT
-            const { data: tokens } = await axios.post('http://127.0.0.1:8000/api/auth/login/', {
+            const { data: tokens } = await axios.post(`${API_BASE}/auth/login/`, {
                 email,
                 password
             });
@@ -26,7 +31,7 @@ const Login = () => {
             localStorage.setItem('refresh_token', tokens.refresh);
 
             // 2. Récupérer les infos de l'utilisateur
-            const { data: user } = await axios.get('http://127.0.0.1:8000/api/accounts/users/me/', {
+            const { data: user } = await axios.get(`${API_BASE}/accounts/users/me/`, {
                 headers: { Authorization: `Bearer ${tokens.access}` }
             });
             localStorage.setItem('user', JSON.stringify(user));
@@ -41,9 +46,18 @@ const Login = () => {
             else navigate('/');
 
         } catch (err) {
-            const msg = err.response?.data?.detail || 'Email ou mot de passe incorrect';
-            setError(msg);
             console.error(err);
+            const data = err.response?.data;
+            let msg = 'Email ou mot de passe incorrect.';
+            if (data) {
+                // Les comptes EN_ATTENTE / REJETE sont refusés via non_field_errors
+                if (Array.isArray(data.non_field_errors)) msg = data.non_field_errors.join(' ');
+                else if (data.detail) msg = data.detail;
+                else if (typeof data === 'string') msg = data;
+            } else if (err.request) {
+                msg = "Le serveur est injoignable. Vérifiez votre connexion.";
+            }
+            setMessage({ type: 'error', title: 'Connexion impossible', text: msg });
         } finally {
             setLoading(false);
         }
@@ -422,7 +436,6 @@ const Login = () => {
                         </div>
                     </div>
 
-                    {error && <div className="error-message">{error}</div>}
 
                     <div className="row-between">
                         <label className="remember">
@@ -453,6 +466,8 @@ const Login = () => {
                     Pas encore de compte ? <a href="/register" className="link">Créer un compte</a>
                 </p>
             </main>
+
+            <MessageModal message={message} onClose={() => setMessage(null)} />
         </>
     );
 };

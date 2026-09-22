@@ -97,7 +97,7 @@ const CNParametres = () => {
       setConfirmPassword('');
     } catch (err) {
       console.error(err);
-      const msg = err.response?.data?.detail || 'Erreur lors du changement de mot de passe';
+      const msg = err.response?.data?.error || err.response?.data?.detail || 'Erreur lors du changement de mot de passe';
       setUpdateError(`❌ ${msg}`);
     } finally {
       setIsSubmitting(false);
