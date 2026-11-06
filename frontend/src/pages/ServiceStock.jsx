@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useLoaderData, useRouteError } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
+import MessageModal from '../components/MessageModal';
 import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
@@ -60,7 +61,18 @@ export function ServiceStockError() {
 }
 
 const ServiceStock = () => {
-  const { user, materiels, stock, brigades } = useLoaderData();
+  const { user, materiels, stock: initialStock, brigades } = useLoaderData();
+  const [stock, setStock] = useState(initialStock);
+  const [message, setMessage] = useState(null);
+  const [recherche, setRecherche] = useState('');
+  const [alertesSeulement, setAlertesSeulement] = useState(false);
+
+  // Recharge le stock depuis le serveur (sans recharger la page)
+  const refreshStock = async () => {
+    stockCache = null;
+    const { data } = await api.get('/materiaux/stock/');
+    setStock(data);
+  };
 
   // ─── Modal Approvisionner ───
   const [modalOpen, setModalOpen] = useState(false);
@@ -98,26 +110,35 @@ const ServiceStock = () => {
       .reduce((acc, s) => acc + s.quantite, 0);
   };
 
-  // Retrouve le(s) nom(s) de brigade réellement concernée(s) par le stock bas d'un matériel
-  // (les lignes de "stock" sont censées porter un champ brigade — cf. backend à confirmer)
-  const getBrigadesConcernees = (materielId) => {
-    const brigadeIds = [...new Set(
-      stock.filter(s => s.materiel === materielId && s.brigade != null).map(s => s.brigade)
-    )];
-    if (brigadeIds.length === 0) return 'Toutes brigades';
-    return brigadeIds
-      .map(id => brigades.find(b => b.id === id)?.nom || `#${id}`)
-      .join(', ');
+  // Statut clair d'un matériel : quantité totale comparée au seuil d'alerte
+  const getStatut = (total, seuil) => {
+    if (total === 0) return { key: 'rupture', label: '⛔ Rupture', badge: 'red' };
+    if (total <= seuil) return { key: 'bas', label: '⚠️ Stock bas', badge: 'red' };
+    if (total <= seuil * 2) return { key: 'proche', label: '🟡 Proche du seuil', badge: 'yellow' };
+    return { key: 'normal', label: '✅ Normal', badge: 'green' };
   };
 
-  const alertes = materiels
-    .map(m => {
-      const total = getStockTotal(m.id);
-      const seuil = m.seuil_alerte || 5;
-      return { ...m, total, seuil, brigadeNom: getBrigadesConcernees(m.id) };
-    })
-    .filter(m => m.total < m.seuil) // stock bas, y compris les ruptures totales (total === 0)
-    .sort((a, b) => a.total - b.total);
+  const lignes = materiels.map(m => {
+    const items = stock.filter(x => x.materiel === m.id);
+    const total = items.reduce((a, x) => a + x.quantite, 0);
+    const seuil = m.seuil_alerte ?? 5;
+    const parEtat = {};
+    const parLieu = {};
+    items.forEach(x => {
+      if (x.quantite <= 0) return;
+      parEtat[x.etat] = (parEtat[x.etat] || 0) + x.quantite;
+      const lieu = x.brigade ? `Brigade ${x.brigade_nom || brigades.find(b => b.id === x.brigade)?.nom || ''}` : 'Dépôt central';
+      parLieu[lieu] = (parLieu[lieu] || 0) + x.quantite;
+    });
+    return { ...m, total, seuil, parEtat, parLieu, statut: getStatut(total, seuil) };
+  });
+
+  const nbAlertes = lignes.filter(l => l.statut.key === 'rupture' || l.statut.key === 'bas').length;
+
+  const lignesAffichees = lignes
+    .filter(l => !alertesSeulement || l.statut.key === 'rupture' || l.statut.key === 'bas')
+    .filter(l => !recherche.trim() || l.nom.toLowerCase().includes(recherche.toLowerCase()) || (l.categorie || '').toLowerCase().includes(recherche.toLowerCase()))
+    .sort((a, b) => a.total - b.total || a.nom.localeCompare(b.nom));
 
   // ─── Gérer l'approvisionnement ───
   const openApproModal = (materielId, nom) => {
@@ -157,11 +178,14 @@ const ServiceStock = () => {
         brigade: modalForm.brigade ? parseInt(modalForm.brigade) : null,
         commentaire: `Approvisionnement de ${quantite} ${modalForm.materielNom} en état ${modalForm.etat}`,
       });
+      await refreshStock();
       setModalOpen(false);
-      window.location.reload();
+      setMessage({ type: 'success', title: 'Approvisionnement enregistré', text: `${quantite} × ${modalForm.materielNom} (${modalForm.etat}) ajouté(s) au stock.`, autoClose: 2500 });
     } catch (err) {
-      const msg = err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de l\'approvisionnement.';
-      setModalError(msg);
+      const d = err.response?.data;
+      const msg = d ? (d.error || d.detail || Object.values(d).flat().join(' ')) : 'Impossible de joindre le serveur.';
+      setModalOpen(false);
+      setMessage({ type: 'error', title: 'Approvisionnement impossible', text: msg });
     } finally {
       setModalSaving(false);
     }
@@ -596,36 +620,57 @@ const ServiceStock = () => {
               ))}
             </div>
 
-            {/* ─── Alertes stock bas ─── */}
+            {/* ─── Stock par matériel ─── */}
             <div className="card">
-              <h3>⚠️ Alertes stock bas</h3>
+              <h3>📦 Stock par matériel</h3>
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '14px' }}>
+                <input
+                  type="text"
+                  placeholder="Rechercher un matériel..."
+                  value={recherche}
+                  onChange={(e) => setRecherche(e.target.value)}
+                  style={{ padding: '8px 14px', borderRadius: '10px', border: '1.5px solid #e2e8f0', minWidth: '220px', fontFamily: 'inherit' }}
+                />
+                <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={alertesSeulement} onChange={(e) => setAlertesSeulement(e.target.checked)} />
+                  Alertes seulement
+                </label>
+                <span className={`badge ${nbAlertes > 0 ? 'red' : 'green'}`} style={{ marginLeft: 'auto' }}>
+                  {nbAlertes > 0 ? `⚠️ ${nbAlertes} matériel(s) à réapprovisionner` : '✅ Aucune alerte de stock'}
+                </span>
+              </div>
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
                       <th>Matériel</th>
-                      <th>Stock actuel</th>
-                      <th>Seuil</th>
-                      <th>Brigade</th>
+                      <th>Quantité totale</th>
+                      <th>Seuil d'alerte</th>
+                      <th>Statut</th>
+                      <th>Par état</th>
+                      <th>Où ?</th>
                       <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {alertes.length === 0 ? (
-                      <tr><td colSpan="5" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>✅ Aucune alerte de stock bas</td></tr>
+                    {lignesAffichees.length === 0 ? (
+                      <tr><td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>Aucun matériel à afficher</td></tr>
                     ) : (
-                      alertes.map(m => (
+                      lignesAffichees.map(m => (
                         <tr key={m.id}>
-                          <td><strong>{m.nom}</strong></td>
-                          <td>{m.total}</td>
+                          <td><strong>{m.nom}</strong><div style={{ fontSize: '0.72rem', color: '#64748b' }}>{m.categorie}</div></td>
+                          <td><strong style={{ fontSize: '1.05rem' }}>{m.total}</strong></td>
                           <td>{m.seuil}</td>
-                          <td>{m.brigadeNom}</td>
+                          <td><span className={`badge ${m.statut.badge}`}>{m.statut.label}</span></td>
+                          <td style={{ fontSize: '0.78rem', lineHeight: 1.6 }}>
+                            {Object.keys(m.parEtat).length === 0 ? '—' : Object.entries(m.parEtat).map(([e, q]) => <div key={e}>{e} : <strong>{q}</strong></div>)}
+                          </td>
+                          <td style={{ fontSize: '0.78rem', lineHeight: 1.6 }}>
+                            {Object.keys(m.parLieu).length === 0 ? '—' : Object.entries(m.parLieu).map(([l, q]) => <div key={l}>{l} : <strong>{q}</strong></div>)}
+                          </td>
                           <td>
-                            <button
-                              className="btn-sm primary"
-                              onClick={() => openApproModal(m.id, m.nom)}
-                            >
-                              Approvisionner
+                            <button className="btn-sm primary" onClick={() => openApproModal(m.id, m.nom)}>
+                              ＋ Approvisionner
                             </button>
                           </td>
                         </tr>
@@ -639,6 +684,8 @@ const ServiceStock = () => {
           </main>
         </div>
       </div>
+
+      <MessageModal message={message} onClose={() => setMessage(null)} />
 
       {modalOpen && (
         <div className="modal-overlay" onClick={closeModal}>

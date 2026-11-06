@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useLoaderData, useRouteError } from 'react-router-dom';
 import CNSidebar from '../components/CNSidebar';
 import api from '../api/axios';
+import RapportModal, { buildReport } from '../components/RapportModal';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
 // ─── Cache mémoire ───
@@ -74,6 +75,7 @@ async function fetchCNRapportsData() {
     assignes,
     section: section,
     brigade: brigade,
+    mouvements: mesMouvements,
   };
 
   cnRapportsCache = result;
@@ -118,21 +120,43 @@ const CNRapports = () => {
     assignes,
     brigade,
     section,
+    mouvements,
   } = useLoaderData();
 
   const [periode, setPeriode] = useState('');
+  const getDateLimite = (p) => {
+    const n = new Date();
+    if (p === 'mois') return new Date(n.getFullYear(), n.getMonth(), 1);
+    if (p === 'trimestre') return new Date(n.getFullYear(), n.getMonth() - 2, 1);
+    if (p === 'annee') return new Date(n.getFullYear(), 0, 1);
+    return null;
+  };
+  const mouvementsFiltres = (mouvements || []).filter(m => {
+    const l = getDateLimite(periode);
+    return !l || new Date(m.date_mouvement) >= l;
+  });
 
-  const handleGenerer = () => {
-    alert(`📊 Rapport généré !\nPériode: ${periode || 'Toutes'}\nBasé sur vos données personnelles.`);
+  const [report, setReport] = useState(null);
+
+  const openReport = () => {
+    const periodeLabel = { mois: 'Ce mois', trimestre: 'Ce trimestre', annee: 'Cette année' }[periode];
+    const filtres = [];
+    if (periodeLabel) filtres.push('Période : ' + periodeLabel);
+    filtres.push('Brigade ' + brigadeName, 'Section ' + sectionName);
+    setReport(buildReport({
+      mouvements: mouvementsFiltres,
+      stock: null,
+      filtres,
+      titre: "Mon rapport d'activité",
+    }));
   };
 
-  const handleExportPDF = () => {
-    alert('📥 Export PDF en cours...');
+  const handleGenerer = (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    openReport();
   };
 
-  const handleCardClick = (titre, detail) => {
-    alert(`📄 ${titre}\n${detail || ''}`);
-  };
+  const handleCardClick = () => openReport();
 
   const brigadeName = brigade?.nom || 'N/A';
   const sectionName = section?.nom || 'N/A';
@@ -384,13 +408,6 @@ const CNRapports = () => {
               <button className="btn-sm primary" style={{ padding: '8px 20px' }} onClick={handleGenerer}>
                 Générer
               </button>
-              <button
-                className="btn-sm success"
-                style={{ padding: '8px 20px', marginLeft: 'auto' }}
-                onClick={handleExportPDF}
-              >
-                📥 Exporter PDF
-              </button>
             </div>
 
             {/* ─── Cartes de rapports ─── */}
@@ -463,6 +480,7 @@ const CNRapports = () => {
           </main>
         </div>
       </div>
+      {report && <RapportModal report={report} user={user} onClose={() => setReport(null)} />}
     </>
   );
 };

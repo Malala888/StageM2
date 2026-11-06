@@ -3,6 +3,14 @@ import { useLoaderData, useRouteError } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
 import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
+import MouvementDetailModal, {
+  ConcerneCell,
+  exportMouvementsCsv,
+  ROLES,
+  TYPES,
+  STATUTS,
+  fmtDate,
+} from '../components/MouvementDetail';
 
 // ─── Cache mémoire ───
 let mouvementsCache = null;
@@ -84,6 +92,13 @@ const ServiceMouvements = () => {
   const [brigadeDestination, setBrigadeDestination] = useState('');
   const [etatMvt, setEtatMvt] = useState('NEUF');
   const [dateRetourPrevue, setDateRetourPrevue] = useState('');
+  // La date de retour doit toujours être strictement après la date d'emprunt
+  const lendemain = (d) => {
+    if (!d) return '';
+    const x = new Date(d);
+    x.setDate(x.getDate() + 1);
+    return x.toISOString().split('T')[0];
+  };
   const [commentaire, setCommentaire] = useState('');
 
   // Types de mouvement qui nécessitent un état (pour savoir quelle ligne de Stock mettre à jour)
@@ -120,6 +135,8 @@ const ServiceMouvements = () => {
       result = result.filter(m =>
         (m.materiel_nom || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         (m.agent_concerner_nom || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (m.createur_nom || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (m.brigade_nom || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         m.numero.toLowerCase().includes(searchTerm.toLowerCase())
       );
     }
@@ -176,6 +193,20 @@ const ServiceMouvements = () => {
       setSubmitting(false);
       return;
     }
+    if (type === 'EMPRUNT' && dateRetourPrevue <= date) {
+      setSubmitError("La date de retour doit être après la date d'emprunt (pas le même jour ni avant).");
+      setSubmitting(false);
+      return;
+    }
+    if (type === 'RETOUR') {
+      const ouvert = mouvements.find(m => m.type === 'EMPRUNT' && ['EN_COURS', 'EN_RETARD'].includes(m.statut)
+        && String(m.materiel) === String(materiel) && String(m.agent_concerner || '') === String(agent || ''));
+      if (ouvert && date <= ouvert.date_mouvement) {
+        setSubmitError(`La date de retour doit être après la date d'emprunt (${new Date(ouvert.date_mouvement).toLocaleDateString('fr-FR')}).`);
+        setSubmitting(false);
+        return;
+      }
+    }
 
     const payload = {
       type,
@@ -223,9 +254,8 @@ const ServiceMouvements = () => {
     }
   };
 
-  const handleDetail = (numero) => {
-    alert(`📄 Détail du mouvement : ${numero}`);
-  };
+  const [detail, setDetail] = useState(null);
+  const handleDetail = (m) => setDetail(m);
 
   // ─── Rendu ───
   return (
@@ -487,6 +517,10 @@ const ServiceMouvements = () => {
         .type-badge.retour { background: #dcfce7; color: #16a34a; }
         .type-badge.transfert { background: #e0e7ff; color: #4f46e5; }
         .type-badge.reparation { background: #fce4ec; color: #dc2626; }
+        .mouvements-body table { table-layout: auto; }
+        .mouvements-body table td { vertical-align: middle; padding-top: 12px; padding-bottom: 12px; line-height: 1.35; }
+        .mouvements-body table tbody tr:hover { background: rgba(37,99,235,0.04); }
+        .mouvements-body .badge, .mouvements-body .type-badge { white-space: nowrap; }
         .type-badge.rebut { background: #fee2e2; color: #b91c1c; }
 
         .btn-sm {
@@ -690,7 +724,7 @@ const ServiceMouvements = () => {
                       id="date"
                       ref={dateInputRef}
                       value={date}
-                      onChange={(e) => setDate(e.target.value)}
+                      onChange={(e) => { setDate(e.target.value); if (dateRetourPrevue && dateRetourPrevue <= e.target.value) setDateRetourPrevue(''); }}
                       required
                     />
                   </div>
@@ -763,6 +797,7 @@ const ServiceMouvements = () => {
                           type="date"
                           id="date-retour"
                           value={dateRetourPrevue}
+                          min={lendemain(date)}
                           onChange={(e) => setDateRetourPrevue(e.target.value)}
                           required
                         />
@@ -833,18 +868,26 @@ const ServiceMouvements = () => {
                 >
                   Réinitialiser
                 </button>
+                <button
+                  className="btn-sm success"
+                  style={{ padding: '8px 20px', marginLeft: 'auto' }}
+                  onClick={() => exportMouvementsCsv(filteredMouvements)}
+                  disabled={filteredMouvements.length === 0}
+                >
+                  📥 Exporter (Excel)
+                </button>
               </div>
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
-                      <th>N°</th>
+                      <th style={{ width: '110px' }}>Date</th>
                       <th>Matériel</th>
-                      <th>Type</th>
-                      <th>Agent</th>
-                      <th>Date</th>
-                      <th>Statut</th>
-                      <th>Actions</th>
+                      <th style={{ width: '140px' }}>Type</th>
+                      <th>Effectué par</th>
+                      <th>Concerné</th>
+                      <th style={{ width: '150px' }}>Statut</th>
+                      <th style={{ width: '60px' }}></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -866,6 +909,8 @@ const ServiceMouvements = () => {
                         }[m.type] || '';
 
                         const statutClass = {
+                          'DEMANDE': 'blue',
+                          'REJETEE': 'red',
                           'EN_COURS': 'yellow',
                           'RETOURNE': 'green',
                           'EN_RETARD': 'red',
@@ -875,14 +920,25 @@ const ServiceMouvements = () => {
 
                         return (
                           <tr key={m.id}>
-                            <td><strong>{m.numero}</strong></td>
-                            <td>{m.materiel_nom || 'N/A'}</td>
-                            <td><span className={`type-badge ${typeClass}`}>{m.type}</span></td>
-                            <td>{m.agent_concerner_nom || '—'}</td>
-                            <td>{new Date(m.date_mouvement).toLocaleDateString('fr-FR')}</td>
-                            <td><span className={`badge ${statutClass}`}>{m.statut}</span></td>
+                            <td>
+                              <strong>{fmtDate(m.date_mouvement)}</strong>
+                              <div className="cell-sub mono">{m.numero}</div>
+                            </td>
+                            <td>
+                              <strong>{m.materiel_nom || 'N/A'}</strong>
+                              <div className="cell-sub">× {m.quantite}{m.etat ? ` · ${m.etat}` : ''}</div>
+                            </td>
+                            <td><span className={`type-badge ${typeClass}`}>{TYPES[m.type] || m.type}</span></td>
+                            <td>
+                              {m.createur_nom || '—'}
+                              <div className="cell-sub">{ROLES[m.createur_role] || ''}</div>
+                            </td>
+                            <td>
+                              <ConcerneCell m={m} />
+                            </td>
+                            <td><span className={`badge ${statutClass}`}>{STATUTS[m.statut] || m.statut}</span></td>
                             <td className="actions-cell">
-                              <button className="btn-sm outline" onClick={() => handleDetail(m.numero)}>📄 Détail</button>
+                              <button className="btn-sm outline" title="Voir le détail" onClick={() => handleDetail(m)}>👁️</button>
                             </td>
                           </tr>
                         );
@@ -896,6 +952,8 @@ const ServiceMouvements = () => {
           </main>
         </div>
       </div>
+
+      <MouvementDetailModal mouvement={detail} onClose={() => setDetail(null)} />
     </>
   );
 };

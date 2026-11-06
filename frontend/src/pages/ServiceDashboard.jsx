@@ -675,7 +675,7 @@ const ServiceDashboard = () => {
                               <button
                                 className="btn-sm danger"
                                 onClick={async () => {
-                                  if (!confirm(`Rejeter ${u.nom} ${u.prenom} ?`)) return;
+                                  if (!(await window.appConfirm(`Rejeter ${u.nom} ${u.prenom} ?`))) return;
                                   try {
                                     await api.patch(`/accounts/users/${u.id}/rejeter/`);
                                     alert(`❌ ${u.nom} ${u.prenom} rejeté`);

@@ -88,10 +88,25 @@ const ServiceUsers = () => {
   // ─── États pour les onglets ───
   const [activeTab, setActiveTab] = useState('users');
 
-  // ─── États pour les formulaires ───
-  const [newSection, setNewSection] = useState('');
-  const [newBrigade, setNewBrigade] = useState('');
-  const [brigadeSection, setBrigadeSection] = useState('');
+  // ─── Modal : modifier un utilisateur ───
+  const [userModalOpen, setUserModalOpen] = useState(false);
+  const [userModalSaving, setUserModalSaving] = useState(false);
+  const [userModalError, setUserModalError] = useState('');
+  const [userModalForm, setUserModalForm] = useState({ id: null, nom: '', prenom: '', email: '' });
+
+  // ─── Modal : ajouter / modifier une section ───
+  const [sectionModalOpen, setSectionModalOpen] = useState(false);
+  const [sectionModalMode, setSectionModalMode] = useState('add');
+  const [sectionModalSaving, setSectionModalSaving] = useState(false);
+  const [sectionModalError, setSectionModalError] = useState('');
+  const [sectionModalForm, setSectionModalForm] = useState({ id: null, nom: '', code: '' });
+
+  // ─── Modal : ajouter / modifier une brigade ───
+  const [brigadeModalOpen, setBrigadeModalOpen] = useState(false);
+  const [brigadeModalMode, setBrigadeModalMode] = useState('add');
+  const [brigadeModalSaving, setBrigadeModalSaving] = useState(false);
+  const [brigadeModalError, setBrigadeModalError] = useState('');
+  const [brigadeModalForm, setBrigadeModalForm] = useState({ id: null, nom: '', code: '', section: '' });
 
   // Appliquer les filtres
   useEffect(() => {
@@ -156,27 +171,42 @@ const ServiceUsers = () => {
     return false;
   };
 
-  const handleEdit = async (u) => {
-    const nom = prompt('Nom :', u.nom);
-    if (!nom) return;
-    const prenom = prompt('Prénom :', u.prenom);
-    if (!prenom) return;
-    const email = prompt('Email :', u.email);
-    if (!email) return;
+  const openEditUserModal = (u) => {
+    setUserModalError('');
+    setUserModalForm({ id: u.id, nom: u.nom, prenom: u.prenom, email: u.email });
+    setUserModalOpen(true);
+  };
 
+  const closeUserModal = () => {
+    if (userModalSaving) return;
+    setUserModalOpen(false);
+  };
+
+  const handleUserModalSubmit = async (e) => {
+    e.preventDefault();
+    if (!userModalForm.nom.trim() || !userModalForm.prenom.trim() || !userModalForm.email.trim()) {
+      setUserModalError('Tous les champs sont obligatoires.');
+      return;
+    }
+    setUserModalSaving(true);
+    setUserModalError('');
     try {
-      await api.patch(`/accounts/users/${u.id}/`, { nom, prenom, email });
-      alert('✅ Utilisateur modifié avec succès');
+      await api.patch(`/accounts/users/${userModalForm.id}/`, {
+        nom: userModalForm.nom.trim(),
+        prenom: userModalForm.prenom.trim(),
+        email: userModalForm.email.trim(),
+      });
       window.location.reload();
     } catch (err) {
       const msg = err.response?.data?.error
         || (err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de la modification');
-      alert(`❌ ${msg}`);
+      setUserModalError(msg);
+      setUserModalSaving(false);
     }
   };
 
   const handleDelete = async (id, nom) => {
-    if (!confirm(`Supprimer "${nom}" ?`)) return;
+    if (!(await window.appConfirm(`Supprimer "${nom}" ?`))) return;
     try {
       await api.delete(`/accounts/users/${id}/`);
       alert('✅ Utilisateur supprimé');
@@ -199,7 +229,7 @@ const ServiceUsers = () => {
   };
 
   const handleReject = async (id, nom) => {
-    if (!confirm(`Rejeter ${nom} ?`)) return;
+    if (!(await window.appConfirm(`Rejeter ${nom} ?`))) return;
     try {
       await api.patch(`/accounts/users/${id}/rejeter/`);
       alert(`❌ ${nom} rejeté`);
@@ -210,68 +240,51 @@ const ServiceUsers = () => {
     }
   };
 
-  const handleAddSection = async () => {
-    if (!newSection.trim()) {
-      alert('Veuillez saisir un nom de section');
-      return;
-    }
-    const code = prompt('Code de la section (ex: FIA) :');
-    if (!code) return;
-    try {
-      await api.post('/personnel/sections/', { nom: newSection.trim(), code: code.toUpperCase() });
-      alert(`✅ Section "${newSection}" ajoutée`);
-      setNewSection('');
-      window.location.reload();
-    } catch (err) {
-      const msg = err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de l\'ajout';
-      alert(`❌ ${msg}`);
-    }
+  // ─── Modal Section (ajout / modification) ───
+  const openAddSectionModal = () => {
+    setSectionModalMode('add');
+    setSectionModalError('');
+    setSectionModalForm({ id: null, nom: '', code: '' });
+    setSectionModalOpen(true);
   };
 
-  const handleAddBrigade = async () => {
-    if (!newBrigade.trim()) {
-      alert('Veuillez saisir un nom de brigade');
-      return;
-    }
-    if (!brigadeSection) {
-      alert('Veuillez sélectionner une section');
-      return;
-    }
-    const code = prompt('Code de la brigade (ex: BOA) :');
-    if (!code) return;
-    try {
-      await api.post('/personnel/brigades/', {
-        nom: newBrigade.trim(),
-        code: code.toUpperCase(),
-        section: parseInt(brigadeSection),
-      });
-      alert(`✅ Brigade "${newBrigade}" ajoutée`);
-      setNewBrigade('');
-      setBrigadeSection('');
-      window.location.reload();
-    } catch (err) {
-      const msg = err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de l\'ajout';
-      alert(`❌ ${msg}`);
-    }
+  const openEditSectionModal = (s) => {
+    setSectionModalMode('edit');
+    setSectionModalError('');
+    setSectionModalForm({ id: s.id, nom: s.nom, code: s.code });
+    setSectionModalOpen(true);
   };
 
-  const handleEditSection = async (s) => {
-    const nom = prompt('Nom de la section :', s.nom);
-    if (!nom) return;
-    const code = prompt('Code de la section :', s.code);
-    if (!code) return;
+  const closeSectionModal = () => {
+    if (sectionModalSaving) return;
+    setSectionModalOpen(false);
+  };
+
+  const handleSectionModalSubmit = async (e) => {
+    e.preventDefault();
+    if (!sectionModalForm.nom.trim() || !sectionModalForm.code.trim()) {
+      setSectionModalError('Le nom et le code sont obligatoires.');
+      return;
+    }
+    setSectionModalSaving(true);
+    setSectionModalError('');
+    const payload = { nom: sectionModalForm.nom.trim(), code: sectionModalForm.code.trim().toUpperCase() };
     try {
-      await api.patch(`/personnel/sections/${s.id}/`, { nom, code: code.toUpperCase() });
-      alert('✅ Section modifiée');
+      if (sectionModalMode === 'add') {
+        await api.post('/personnel/sections/', payload);
+      } else {
+        await api.patch(`/personnel/sections/${sectionModalForm.id}/`, payload);
+      }
       window.location.reload();
     } catch (err) {
-      const msg = err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de la modification';
-      alert(`❌ ${msg}`);
+      const msg = err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de l\'enregistrement';
+      setSectionModalError(msg);
+      setSectionModalSaving(false);
     }
   };
 
   const handleDeleteSection = async (s) => {
-    if (!confirm(`Supprimer la section "${s.nom}" ?`)) return;
+    if (!(await window.appConfirm(`Supprimer la section "${s.nom}" ?`))) return;
     try {
       await api.delete(`/personnel/sections/${s.id}/`);
       alert('✅ Section supprimée');
@@ -282,23 +295,55 @@ const ServiceUsers = () => {
     }
   };
 
-  const handleEditBrigade = async (b) => {
-    const nom = prompt('Nom de la brigade :', b.nom);
-    if (!nom) return;
-    const code = prompt('Code de la brigade :', b.code);
-    if (!code) return;
+  // ─── Modal Brigade (ajout / modification) ───
+  const openAddBrigadeModal = () => {
+    setBrigadeModalMode('add');
+    setBrigadeModalError('');
+    setBrigadeModalForm({ id: null, nom: '', code: '', section: '' });
+    setBrigadeModalOpen(true);
+  };
+
+  const openEditBrigadeModal = (b) => {
+    setBrigadeModalMode('edit');
+    setBrigadeModalError('');
+    setBrigadeModalForm({ id: b.id, nom: b.nom, code: b.code, section: b.section || '' });
+    setBrigadeModalOpen(true);
+  };
+
+  const closeBrigadeModal = () => {
+    if (brigadeModalSaving) return;
+    setBrigadeModalOpen(false);
+  };
+
+  const handleBrigadeModalSubmit = async (e) => {
+    e.preventDefault();
+    if (!brigadeModalForm.nom.trim() || !brigadeModalForm.code.trim() || !brigadeModalForm.section) {
+      setBrigadeModalError('Le nom, le code et la section sont obligatoires.');
+      return;
+    }
+    setBrigadeModalSaving(true);
+    setBrigadeModalError('');
+    const payload = {
+      nom: brigadeModalForm.nom.trim(),
+      code: brigadeModalForm.code.trim().toUpperCase(),
+      section: parseInt(brigadeModalForm.section),
+    };
     try {
-      await api.patch(`/personnel/brigades/${b.id}/`, { nom, code: code.toUpperCase() });
-      alert('✅ Brigade modifiée');
+      if (brigadeModalMode === 'add') {
+        await api.post('/personnel/brigades/', payload);
+      } else {
+        await api.patch(`/personnel/brigades/${brigadeModalForm.id}/`, payload);
+      }
       window.location.reload();
     } catch (err) {
-      const msg = err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de la modification';
-      alert(`❌ ${msg}`);
+      const msg = err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de l\'enregistrement';
+      setBrigadeModalError(msg);
+      setBrigadeModalSaving(false);
     }
   };
 
   const handleDeleteBrigade = async (b) => {
-    if (!confirm(`Supprimer la brigade "${b.nom}" ?`)) return;
+    if (!(await window.appConfirm(`Supprimer la brigade "${b.nom}" ?`))) return;
     try {
       await api.delete(`/personnel/brigades/${b.id}/`);
       alert('✅ Brigade supprimée');
@@ -706,6 +751,80 @@ const ServiceUsers = () => {
           .inline-form { flex-direction: column; align-items: stretch; }
           .inline-form .field input { min-width: auto; }
         }
+
+        /* ─── Modal ─── */
+        .modal-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(15, 23, 42, 0.45);
+          backdrop-filter: blur(2px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+          padding: 16px;
+        }
+        .modal-card {
+          background: #ffffff;
+          border-radius: 16px;
+          width: 100%;
+          max-width: 480px;
+          max-height: 90vh;
+          overflow-y: auto;
+          box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+        }
+        .modal-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 18px 22px;
+          border-bottom: 1px solid #e2e8f0;
+        }
+        .modal-header h3 { font-size: 1rem; font-weight: 700; color: #0f172a; margin: 0; }
+        .modal-close {
+          background: none;
+          border: none;
+          font-size: 1.2rem;
+          color: #64748b;
+          cursor: pointer;
+          line-height: 1;
+          padding: 4px;
+        }
+        .modal-close:hover { color: #0f172a; }
+        .modal-body { padding: 20px 22px; }
+        .modal-field { margin-bottom: 14px; }
+        .modal-field label { display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 6px; }
+        .modal-field input,
+        .modal-field select {
+          width: 100%;
+          padding: 9px 12px;
+          border: 1px solid #cbd5e1;
+          border-radius: 8px;
+          font-size: 0.9rem;
+          box-sizing: border-box;
+        }
+        .modal-error {
+          background: #fef2f2;
+          color: #b91c1c;
+          border: 1px solid #fecaca;
+          border-radius: 8px;
+          padding: 8px 12px;
+          font-size: 0.82rem;
+          margin-bottom: 14px;
+        }
+        .modal-footer {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          padding: 16px 22px;
+          border-top: 1px solid #e2e8f0;
+        }
+        .modal-footer button { padding: 9px 18px; border-radius: 8px; font-size: 0.85rem; font-weight: 600; cursor: pointer; border: none; }
+        .modal-footer .btn-cancel { background: #f1f5f9; color: #334155; }
+        .modal-footer .btn-cancel:hover { background: #e2e8f0; }
+        .modal-footer .btn-save { background: #2563eb; color: #fff; }
+        .modal-footer .btn-save:hover { background: #1d4ed8; }
+        .modal-footer .btn-save:disabled { opacity: 0.6; cursor: not-allowed; }
       `}</style>
 
       <div className="users-body">
@@ -827,7 +946,6 @@ const ServiceUsers = () => {
                               )}
                               {canManage(u) && (
                                 <>
-                                  <button className="btn-sm outline" onClick={() => handleEdit(u)}>✏️</button>
                                   <button className="btn-sm danger" onClick={() => handleDelete(u.id, `${u.nom} ${u.prenom}`)}>🗑️</button>
                                 </>
                               )}
@@ -885,18 +1003,8 @@ const ServiceUsers = () => {
               {/* ─── Onglet Sections ─── */}
               <div className={`tab-content ${activeTab === 'sections' ? 'active' : ''}`}>
                 <div className="inline-form">
-                  <div className="field">
-                    <label htmlFor="new-section">Nouvelle section</label>
-                    <input
-                      type="text"
-                      id="new-section"
-                      placeholder="Ex: Fianarantsoa"
-                      value={newSection}
-                      onChange={(e) => setNewSection(e.target.value)}
-                    />
-                  </div>
-                  <button className="btn-sm primary" style={{ padding: '8px 18px' }} onClick={handleAddSection}>
-                    ➕ Ajouter
+                  <button className="btn-sm primary" style={{ padding: '8px 18px' }} onClick={openAddSectionModal}>
+                    ➕ Nouvelle section
                   </button>
                 </div>
                 <div className="table-wrap">
@@ -921,7 +1029,7 @@ const ServiceUsers = () => {
                             <td>{s.brigades || 0}</td>
                             <td>{s.agents || 0}</td>
                             <td className="actions-cell">
-                              <button className="btn-sm outline" onClick={() => handleEditSection(s)}>✏️</button>
+                              <button className="btn-sm outline" onClick={() => openEditSectionModal(s)}>✏️</button>
                               <button className="btn-sm danger" onClick={() => handleDeleteSection(s)}>🗑️</button>
                             </td>
                           </tr>
@@ -935,31 +1043,8 @@ const ServiceUsers = () => {
               {/* ─── Onglet Brigades ─── */}
               <div className={`tab-content ${activeTab === 'brigades' ? 'active' : ''}`}>
                 <div className="inline-form">
-                  <div className="field">
-                    <label htmlFor="new-brigade">Nouvelle brigade</label>
-                    <input
-                      type="text"
-                      id="new-brigade"
-                      placeholder="Ex: BOA"
-                      value={newBrigade}
-                      onChange={(e) => setNewBrigade(e.target.value)}
-                    />
-                  </div>
-                  <div className="field">
-                    <label htmlFor="brigade-section">Section</label>
-                    <select
-                      id="brigade-section"
-                      value={brigadeSection}
-                      onChange={(e) => setBrigadeSection(e.target.value)}
-                    >
-                      <option value="">Sélectionner</option>
-                      {sections.map(s => (
-                        <option key={s.id} value={s.id}>{s.nom}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <button className="btn-sm primary" style={{ padding: '8px 18px' }} onClick={handleAddBrigade}>
-                    ➕ Ajouter
+                  <button className="btn-sm primary" style={{ padding: '8px 18px' }} onClick={openAddBrigadeModal}>
+                    ➕ Nouvelle brigade
                   </button>
                 </div>
                 <div className="table-wrap">
@@ -984,7 +1069,7 @@ const ServiceUsers = () => {
                             <td>{getSectionName(b.section)}</td>
                             <td>{b.agents || 0}</td>
                             <td className="actions-cell">
-                              <button className="btn-sm outline" onClick={() => handleEditBrigade(b)}>✏️</button>
+                              <button className="btn-sm outline" onClick={() => openEditBrigadeModal(b)}>✏️</button>
                               <button className="btn-sm danger" onClick={() => handleDeleteBrigade(b)}>🗑️</button>
                             </td>
                           </tr>
@@ -999,6 +1084,120 @@ const ServiceUsers = () => {
           </main>
         </div>
       </div>
+
+      {/* ─── Modal : modifier un utilisateur ─── */}
+      {userModalOpen && (
+        <div className="modal-overlay" onClick={closeUserModal}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>✏️ Modifier l'utilisateur</h3>
+              <button className="modal-close" onClick={closeUserModal}>✕</button>
+            </div>
+            <form onSubmit={handleUserModalSubmit}>
+              <div className="modal-body">
+                {userModalError && <div className="modal-error">{userModalError}</div>}
+                <div className="modal-field">
+                  <label htmlFor="um-nom">Nom *</label>
+                  <input id="um-nom" type="text" value={userModalForm.nom}
+                    onChange={(e) => setUserModalForm({ ...userModalForm, nom: e.target.value })} required />
+                </div>
+                <div className="modal-field">
+                  <label htmlFor="um-prenom">Prénom *</label>
+                  <input id="um-prenom" type="text" value={userModalForm.prenom}
+                    onChange={(e) => setUserModalForm({ ...userModalForm, prenom: e.target.value })} required />
+                </div>
+                <div className="modal-field">
+                  <label htmlFor="um-email">Email *</label>
+                  <input id="um-email" type="email" value={userModalForm.email}
+                    onChange={(e) => setUserModalForm({ ...userModalForm, email: e.target.value })} required />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn-cancel" onClick={closeUserModal}>Annuler</button>
+                <button type="submit" className="btn-save" disabled={userModalSaving}>
+                  {userModalSaving ? 'Enregistrement...' : 'Enregistrer'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Modal : ajouter / modifier une section ─── */}
+      {sectionModalOpen && (
+        <div className="modal-overlay" onClick={closeSectionModal}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>{sectionModalMode === 'add' ? '➕ Nouvelle section' : '✏️ Modifier la section'}</h3>
+              <button className="modal-close" onClick={closeSectionModal}>✕</button>
+            </div>
+            <form onSubmit={handleSectionModalSubmit}>
+              <div className="modal-body">
+                {sectionModalError && <div className="modal-error">{sectionModalError}</div>}
+                <div className="modal-field">
+                  <label htmlFor="sm-nom">Nom *</label>
+                  <input id="sm-nom" type="text" placeholder="Ex: Fianarantsoa" value={sectionModalForm.nom}
+                    onChange={(e) => setSectionModalForm({ ...sectionModalForm, nom: e.target.value })} required />
+                </div>
+                <div className="modal-field">
+                  <label htmlFor="sm-code">Code *</label>
+                  <input id="sm-code" type="text" placeholder="Ex: FIA" value={sectionModalForm.code}
+                    onChange={(e) => setSectionModalForm({ ...sectionModalForm, code: e.target.value })} required />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn-cancel" onClick={closeSectionModal}>Annuler</button>
+                <button type="submit" className="btn-save" disabled={sectionModalSaving}>
+                  {sectionModalSaving ? 'Enregistrement...' : (sectionModalMode === 'add' ? 'Ajouter' : 'Enregistrer')}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Modal : ajouter / modifier une brigade ─── */}
+      {brigadeModalOpen && (
+        <div className="modal-overlay" onClick={closeBrigadeModal}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>{brigadeModalMode === 'add' ? '➕ Nouvelle brigade' : '✏️ Modifier la brigade'}</h3>
+              <button className="modal-close" onClick={closeBrigadeModal}>✕</button>
+            </div>
+            <form onSubmit={handleBrigadeModalSubmit}>
+              <div className="modal-body">
+                {brigadeModalError && <div className="modal-error">{brigadeModalError}</div>}
+                <div className="modal-field">
+                  <label htmlFor="bm-nom">Nom *</label>
+                  <input id="bm-nom" type="text" placeholder="Ex: BOA" value={brigadeModalForm.nom}
+                    onChange={(e) => setBrigadeModalForm({ ...brigadeModalForm, nom: e.target.value })} required />
+                </div>
+                <div className="modal-field">
+                  <label htmlFor="bm-code">Code *</label>
+                  <input id="bm-code" type="text" placeholder="Ex: BOA" value={brigadeModalForm.code}
+                    onChange={(e) => setBrigadeModalForm({ ...brigadeModalForm, code: e.target.value })} required />
+                </div>
+                <div className="modal-field">
+                  <label htmlFor="bm-section">Section *</label>
+                  <select id="bm-section" value={brigadeModalForm.section}
+                    onChange={(e) => setBrigadeModalForm({ ...brigadeModalForm, section: e.target.value })} required>
+                    <option value="">Sélectionner</option>
+                    {sections.map(s => (
+                      <option key={s.id} value={s.id}>{s.nom}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn-cancel" onClick={closeBrigadeModal}>Annuler</button>
+                <button type="submit" className="btn-save" disabled={brigadeModalSaving}>
+                  {brigadeModalSaving ? 'Enregistrement...' : (brigadeModalMode === 'add' ? 'Ajouter' : 'Enregistrer')}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   );
 };

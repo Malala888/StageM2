@@ -2,6 +2,8 @@ import React from 'react';
 import { createBrowserRouter, RouterProvider, Outlet, useNavigation } from 'react-router-dom';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import NotificationBell from './components/NotificationBell';
+import AppDialogs from './components/AppDialogs';
 // Chef de Service
 import ServiceDashboard, { serviceDashboardLoader, ServiceDashboardError } from './pages/ServiceDashboard';
 import ServiceMateriels, { serviceMaterielsLoader, ServiceMaterielsError } from './pages/ServiceMateriels';
@@ -79,6 +81,8 @@ function Layout() {
       `}</style>
       {isLoading && <div className="top-loading-bar" />}
       <Outlet />
+      <NotificationBell />
+      <AppDialogs />
     </>
   );
 }

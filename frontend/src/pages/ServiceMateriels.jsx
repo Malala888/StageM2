@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useLoaderData, useRouteError } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
+import MessageModal from '../components/MessageModal';
 import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
@@ -56,7 +57,11 @@ export function ServiceMaterielsError() {
 
 // ─── Composant principal ───
 const ServiceMateriels = () => {
-  const { user, materiels: initialMateriels, stockData } = useLoaderData();
+  const { user, materiels: initialMateriels, stockData: initialStock } = useLoaderData();
+  const [stockData, setStockData] = useState(initialStock);
+  const [message, setMessage] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null); // { id, nom }
+  const CATEGORIES_PAR_DEFAUT = ['Protection', 'Outillage', 'Informatique', 'Mobilier', 'Véhicule', 'Communication', 'Autre'];
 
   const [materiels, setMateriels] = useState(initialMateriels);
   const [searchTerm, setSearchTerm] = useState('');
@@ -69,7 +74,7 @@ const ServiceMateriels = () => {
   const [modalMode, setModalMode] = useState('add'); // 'add' | 'edit'
   const [modalSaving, setModalSaving] = useState(false);
   const [modalError, setModalError] = useState('');
-  const [modalForm, setModalForm] = useState({ id: null, nom: '', categorie: '', seuil_alerte: 5, description: '' });
+  const [modalForm, setModalForm] = useState({ id: null, nom: '', categorie: '', quantite: '', etat_initial: 'NEUF', quantiteInitiale: null });
 
   // Appliquer les filtres
   useEffect(() => {
@@ -93,11 +98,28 @@ const ServiceMateriels = () => {
     setFilteredMateriels(result);
   }, [searchTerm, categorie, etat, materiels]);
 
+  // Recharger le stock depuis le serveur (et invalider le cache du loader)
+  const refreshStock = async () => {
+    materielsCache = null;
+    try {
+      const { data } = await api.get('/materiaux/stock/');
+      setStockData(data);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   // Obtenir la quantité totale d'un matériel
   const getQuantiteTotale = (materielId) => {
     return stockData
       .filter(s => s.materiel === materielId)
       .reduce((acc, s) => acc + s.quantite, 0);
+  };
+
+  // Quantité du stock central (sans brigade) pour un état donné
+  const getQuantiteCentrale = (materielId, etat) => {
+    const s = stockData.find(x => x.materiel === materielId && x.etat === etat && !x.brigade);
+    return s ? s.quantite : 0;
   };
 
   // Obtenir l'état principal d'un matériel (celui avec le plus de quantité)
@@ -111,10 +133,10 @@ const ServiceMateriels = () => {
   // Obtenir le statut du stock (basé sur le seuil)
   const getStockStatut = (materiel) => {
     const total = getQuantiteTotale(materiel.id);
-    if (total === 0) return { label: '⚠️ Hors stock', class: 'low' };
+    if (total === 0) return { label: '⛔ Rupture', class: 'low' };
     if (total <= materiel.seuil_alerte) return { label: '⚠️ Stock bas', class: 'low' };
-    if (total <= materiel.seuil_alerte * 2) return { label: '⚠️ Seuil atteint', class: 'medium' };
-    return { label: '✅ OK', class: 'high' };
+    if (total <= materiel.seuil_alerte * 2) return { label: '🟡 Proche du seuil', class: 'medium' };
+    return { label: '✅ Normal', class: 'high' };
   };
 
   // ─── Handlers ───
@@ -131,19 +153,22 @@ const ServiceMateriels = () => {
   const openAddModal = () => {
     setModalMode('add');
     setModalError('');
-    setModalForm({ id: null, nom: '', categorie: '', seuil_alerte: 5, description: '' });
+    setModalForm({ id: null, nom: '', categorie: '', quantite: '', etat_initial: 'NEUF', quantiteInitiale: null });
     setModalOpen(true);
   };
 
   const openEditModal = (m) => {
     setModalMode('edit');
     setModalError('');
+    const etatPrincipal = getEtatPrincipal(m.id);
+    const qteCentrale = getQuantiteCentrale(m.id, etatPrincipal);
     setModalForm({
       id: m.id,
       nom: m.nom,
       categorie: m.categorie,
-      seuil_alerte: m.seuil_alerte ?? 5,
-      description: m.description || '',
+      quantite: String(qteCentrale),
+      etat_initial: etatPrincipal,
+      quantiteInitiale: qteCentrale,
     });
     setModalOpen(true);
   };
@@ -165,48 +190,71 @@ const ServiceMateriels = () => {
     const payload = {
       nom: modalForm.nom.trim(),
       categorie: modalForm.categorie.trim(),
-      seuil_alerte: parseInt(modalForm.seuil_alerte) || 5,
-      description: modalForm.description.trim(),
     };
+    if (modalMode === 'add') payload.seuil_alerte = 5; // seuil automatique
 
     try {
       if (modalMode === 'add') {
         const { data } = await api.post('/materiaux/materiels/', payload);
         setMateriels(prev => [...prev, data]);
+        const qte = parseInt(modalForm.quantite);
+        if (qte > 0) {
+          await api.post('/materiaux/mouvements/', {
+            type: 'APPROVISIONNEMENT',
+            materiel: data.id,
+            quantite: qte,
+            etat: modalForm.etat_initial,
+            date_mouvement: new Date().toISOString().split('T')[0],
+            brigade: null,
+            commentaire: `Stock initial de ${qte} ${data.nom} (${modalForm.etat_initial})`,
+          });
+        }
       } else {
         const { data } = await api.patch(`/materiaux/materiels/${modalForm.id}/`, payload);
         setMateriels(prev => prev.map(m => m.id === modalForm.id ? data : m));
+        const nouvelle = parseInt(modalForm.quantite);
+        if (!isNaN(nouvelle) && nouvelle >= 0 && nouvelle !== modalForm.quantiteInitiale) {
+          await api.post('/materiaux/mouvements/', {
+            type: 'INVENTAIRE',
+            materiel: modalForm.id,
+            quantite: nouvelle,
+            etat: modalForm.etat_initial,
+            date_mouvement: new Date().toISOString().split('T')[0],
+            brigade: null,
+            commentaire: `Correction de quantité : ${modalForm.quantiteInitiale} → ${nouvelle} (${modalForm.etat_initial})`,
+          });
+        }
       }
+      await refreshStock();
       setModalOpen(false);
+      setMessage({
+        type: 'success',
+        text: modalMode === 'add' ? `« ${payload.nom} » a bien été ajouté.` : `« ${payload.nom} » a bien été modifié.`,
+        autoClose: 2500,
+      });
     } catch (err) {
-      const msg = err.response?.data ? JSON.stringify(err.response.data) : 'Erreur lors de l\'enregistrement.';
-      setModalError(msg);
+      const d = err.response?.data;
+      const msg = d ? (d.error || d.detail || Object.values(d).flat().join(' ')) : 'Impossible de joindre le serveur.';
+      setModalOpen(false);
+      setMessage({ type: 'error', text: `L'enregistrement a échoué : ${msg}` });
     } finally {
       setModalSaving(false);
     }
   };
 
-  const handleDelete = async (id, nom) => {
-    if (!confirm(`Supprimer "${nom}" ?`)) return;
-    
+  const handleDelete = async () => {
+    if (!confirmDelete) return;
+    const { id, nom } = confirmDelete;
+    setConfirmDelete(null);
     try {
       await api.delete(`/materiaux/materiels/${id}/`);
-      const updated = materiels.filter(m => m.id !== id);
-      setMateriels(updated);
-      setFilteredMateriels(updated.filter(m => {
-        let result = true;
-        if (searchTerm.trim()) {
-          result = m.nom.toLowerCase().includes(searchTerm.toLowerCase());
-        }
-        if (categorie) {
-          result = result && m.categorie === categorie;
-        }
-        return result;
-      }));
-      alert('✅ Matériel supprimé avec succès !');
+      setMateriels(prev => prev.filter(m => m.id !== id));
+      await refreshStock();
+      setMessage({ type: 'success', text: `« ${nom} » a bien été supprimé.`, autoClose: 2500 });
     } catch (err) {
-      alert('❌ Erreur lors de la suppression');
-      console.error(err);
+      const d = err.response?.data;
+      const msg = d ? (d.error || d.detail || Object.values(d).flat().join(' ')) : 'Impossible de joindre le serveur.';
+      setMessage({ type: 'error', text: `La suppression a échoué : ${msg}` });
     }
   };
 
@@ -761,16 +809,17 @@ const ServiceMateriels = () => {
                     <tr>
                       <th>Nom</th>
                       <th>Catégorie</th>
-                      <th>Quantité</th>
+                      <th>Quantité en stock</th>
                       <th>État</th>
-                      <th>Seuil</th>
+                      <th>Seuil d'alerte</th>
+                      <th>Statut du stock</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredMateriels.length === 0 ? (
                       <tr>
-                        <td colSpan="6" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
+                        <td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
                           Aucun matériel trouvé
                         </td>
                       </tr>
@@ -783,12 +832,13 @@ const ServiceMateriels = () => {
                           <tr key={m.id}>
                             <td><strong>{m.nom}</strong></td>
                             <td>{m.categorie}</td>
-                            <td>{total}</td>
+                            <td><strong>{total}</strong></td>
                             <td>
                               <span className={`badge ${etatPrincipal === 'NEUF' ? 'green' : etatPrincipal === 'BON' ? 'green' : etatPrincipal === 'MOYEN' ? 'yellow' : etatPrincipal === 'MAUVAIS' ? 'red' : 'red'}`}>
                                 {etatPrincipal}
                               </span>
                             </td>
+                            <td>{m.seuil_alerte}</td>
                             <td>
                               <span className={`stock-badge ${stockStatut.class}`}>
                                 {stockStatut.label}
@@ -803,7 +853,7 @@ const ServiceMateriels = () => {
                               </button>
                               <button 
                                 className="btn-sm danger" 
-                                onClick={() => handleDelete(m.id, m.nom)}
+                                onClick={() => setConfirmDelete({ id: m.id, nom: m.nom })}
                               >
                                 🗑️
                               </button>
@@ -820,6 +870,25 @@ const ServiceMateriels = () => {
           </main>
         </div>
       </div>
+
+      <MessageModal message={message} onClose={() => setMessage(null)} />
+
+      {confirmDelete && (
+        <div className="modal-overlay" onClick={() => setConfirmDelete(null)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-header-text">
+                <h3>Supprimer ce matériel ?</h3>
+                <div className="modal-subtitle">« {confirmDelete.nom} » sera supprimé définitivement.</div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn-cancel" onClick={() => setConfirmDelete(null)}>Annuler</button>
+              <button type="button" className="btn-save" style={{ background: '#dc2626' }} onClick={handleDelete}>Supprimer</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {modalOpen && (
         <div className="modal-overlay" onClick={closeModal}>
@@ -852,39 +921,62 @@ const ServiceMateriels = () => {
                   />
                 </div>
 
-                <div className="modal-field-row">
-                  <div className="modal-field">
-                    <label htmlFor="modal-categorie">Catégorie</label>
-                    <input
-                      id="modal-categorie"
-                      type="text"
-                      placeholder="Ex : Protection"
-                      value={modalForm.categorie}
-                      onChange={(e) => setModalForm({ ...modalForm, categorie: e.target.value })}
-                      required
-                    />
-                  </div>
-                  <div className="modal-field">
-                    <label htmlFor="modal-seuil">Seuil d'alerte</label>
-                    <input
-                      id="modal-seuil"
-                      type="number"
-                      min="0"
-                      value={modalForm.seuil_alerte}
-                      onChange={(e) => setModalForm({ ...modalForm, seuil_alerte: e.target.value })}
-                    />
-                  </div>
+                <div className="modal-field">
+                  <label htmlFor="modal-categorie">Catégorie</label>
+                  <select
+                    id="modal-categorie"
+                    value={modalForm.categorie}
+                    onChange={(e) => setModalForm({ ...modalForm, categorie: e.target.value })}
+                    required
+                  >
+                    <option value="">— Choisir une catégorie —</option>
+                    {[...new Set([...CATEGORIES_PAR_DEFAUT, ...materiels.map(m => m.categorie), modalForm.categorie].filter(Boolean))].map(c => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
                 </div>
 
-                <div className="modal-field">
-                  <label htmlFor="modal-description">Description <span className="optional-tag">(optionnel)</span></label>
-                  <textarea
-                    id="modal-description"
-                    placeholder="Notes, spécifications techniques..."
-                    value={modalForm.description}
-                    onChange={(e) => setModalForm({ ...modalForm, description: e.target.value })}
-                  />
+                <div className="modal-field-row">
+                  <div className="modal-field">
+                    <label htmlFor="modal-quantite">
+                      {modalMode === 'add' ? 'Quantité initiale' : 'Quantité en stock central'}
+                      {modalMode === 'add' && <span className="optional-tag"> (optionnel)</span>}
+                    </label>
+                    <input
+                      id="modal-quantite"
+                      type="number"
+                      min="0"
+                      placeholder="Ex : 20"
+                      value={modalForm.quantite}
+                      onChange={(e) => setModalForm({ ...modalForm, quantite: e.target.value })}
+                    />
+                  </div>
+                  <div className="modal-field">
+                    <label htmlFor="modal-etat">État</label>
+                    <select
+                      id="modal-etat"
+                      value={modalForm.etat_initial}
+                      onChange={(e) => {
+                        const et = e.target.value;
+                        if (modalMode === 'edit') {
+                          const q = getQuantiteCentrale(modalForm.id, et);
+                          setModalForm({ ...modalForm, etat_initial: et, quantite: String(q), quantiteInitiale: q });
+                        } else {
+                          setModalForm({ ...modalForm, etat_initial: et });
+                        }
+                      }}
+                    >
+                      <option value="NEUF">Neuf</option>
+                      <option value="BON">Bon</option>
+                      <option value="MOYEN">Moyen</option>
+                      <option value="MAUVAIS">Mauvais</option>
+                      <option value="HORS_SERVICE">Hors service</option>
+                    </select>
+                  </div>
                 </div>
+                {modalMode === 'add' && (
+                  <div style={{ fontSize: '0.78rem', color: '#64748b' }}>Seuil d'alerte fixé automatiquement à 5.</div>
+                )}
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn-cancel" onClick={closeModal}>Annuler</button>

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useLoaderData, useRouteError } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
+import MessageModal from '../components/MessageModal';
 import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
@@ -62,8 +63,7 @@ const ServiceParametres = () => {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [updateSuccess, setUpdateSuccess] = useState('');
-  const [updateError, setUpdateError] = useState('');
+  const [message, setMessage] = useState(null); // popup succès / erreur
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // ─── Extraire un message d'erreur lisible depuis une réponse DRF ───
@@ -84,20 +84,18 @@ const ServiceParametres = () => {
   // ─── Handlers ───
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setUpdateError('');
-    setUpdateSuccess('');
 
     // Vérifications avant l'envoi
     if (newPassword && !currentPassword) {
-      setUpdateError('Indiquez votre mot de passe actuel pour pouvoir le changer.');
+      setMessage({ type: 'error', title: 'Vérifiez le formulaire', text: 'Indiquez votre mot de passe actuel pour pouvoir le changer.' });
       return;
     }
     if (newPassword && newPassword.length < 8) {
-      setUpdateError('Le nouveau mot de passe doit contenir au moins 8 caractères.');
+      setMessage({ type: 'error', title: 'Vérifiez le formulaire', text: 'Le nouveau mot de passe doit contenir au moins 8 caractères.' });
       return;
     }
     if (newPassword && newPassword !== confirmPassword) {
-      setUpdateError('Les mots de passe ne correspondent pas.');
+      setMessage({ type: 'error', title: 'Vérifiez le formulaire', text: 'Les mots de passe ne correspondent pas.' });
       return;
     }
 
@@ -118,10 +116,11 @@ const ServiceParametres = () => {
         setConfirmPassword('');
       }
 
-      setUpdateSuccess('✅ Profil mis à jour avec succès !');
+      parametresCache = null;
+      setMessage({ type: 'success', title: 'Profil enregistré', text: newPassword ? 'Votre profil et votre mot de passe ont été mis à jour.' : 'Votre profil a été mis à jour avec succès.', autoClose: 2500 });
     } catch (err) {
       console.error(err);
-      setUpdateError(`❌ ${extractError(err, 'Erreur lors de la mise à jour du profil')}`);
+      setMessage({ type: 'error', title: 'Mise à jour impossible', text: extractError(err, 'Erreur lors de la mise à jour du profil') });
     } finally {
       setIsSubmitting(false);
     }
@@ -473,8 +472,6 @@ const ServiceParametres = () => {
             <div className="card">
               <h3>👤 Modifier mon profil</h3>
 
-              {updateSuccess && <div className="success-message">{updateSuccess}</div>}
-              {updateError && <div className="error-message">{updateError}</div>}
 
               <form onSubmit={handleSubmit}>
                 <div className="form-grid">
@@ -570,6 +567,7 @@ const ServiceParametres = () => {
           </main>
         </div>
       </div>
+      <MessageModal message={message} onClose={() => setMessage(null)} />
     </>
   );
 };

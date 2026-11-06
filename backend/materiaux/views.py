@@ -2,12 +2,14 @@ from django.db import transaction
 from django.db.models import Max, Q
 from django.utils import timezone
 from rest_framework import viewsets, status, permissions
+from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from .models import Materiel, Stock, MouvementMateriel
 from .serializers import MaterielSerializer, StockSerializer, MouvementMaterielSerializer
 from personnel.models import Brigade
+from journal.utils import log_action
 
 
 # ============================================================
@@ -45,7 +47,7 @@ class CanRegisterMouvement(permissions.BasePermission):
         user = request.user
         if not (user and user.is_authenticated):
             return False
-        return user.is_superuser or user.role in ['ADMIN', 'CHEF_SECTION', 'CHEF_BRIGADE']
+        return user.is_superuser or user.role in ['ADMIN', 'CHEF_SECTION', 'CHEF_BRIGADE', 'GL', 'CN']
 
     def has_object_permission(self, request, view, obj):
         if request.method in permissions.SAFE_METHODS:
@@ -62,6 +64,13 @@ class CanRegisterMouvement(permissions.BasePermission):
                 return True
             user_brigade = view._get_user_brigade(user)
             return bool(user_brigade) and obj.brigade_id == user_brigade.id
+        # GL/CN : peuvent seulement retirer (DELETE) leur propre demande tant
+        # qu'elle est encore EN ATTENTE (annuler une demande non traitée) —
+        # jamais la valider/rejeter eux-mêmes, c'est le rôle du chef.
+        if user.role in ['GL', 'CN']:
+            if view.action in ['valider_demande', 'rejeter_demande']:
+                return False
+            return obj.createur_id == user.id and obj.statut == 'DEMANDE'
         return False
 
 
@@ -73,6 +82,19 @@ class MaterielViewSet(viewsets.ModelViewSet):
     serializer_class = MaterielSerializer
     permission_classes = [IsAuthenticated, IsAdminOrChefSectionForWrite]
 
+    def perform_create(self, serializer):
+        super().perform_create(serializer)
+        log_action(self.request, 'MATERIEL_CREE', cible=serializer.instance.nom)
+
+    def perform_update(self, serializer):
+        super().perform_update(serializer)
+        log_action(self.request, 'MATERIEL_MODIFIE', cible=serializer.instance.nom)
+
+    def perform_destroy(self, instance):
+        nom = instance.nom
+        super().perform_destroy(instance)
+        log_action(self.request, 'MATERIEL_SUPPRIME', cible=nom)
+
 
 # ============================================================
 # Stock : lecture scopée par périmètre de rôle, écriture réservée à l'ADMIN
@@ -83,6 +105,21 @@ class StockViewSet(viewsets.ModelViewSet):
     queryset = Stock.objects.all()
     serializer_class = StockSerializer
     permission_classes = [IsAuthenticated, IsAdminForWrite]
+
+    def _desc(self, st):
+        lieu = f"Brigade {st.brigade.nom}" if st.brigade_id else 'Stock central'
+        return f"{st.materiel.nom} ({st.etat}) — {lieu}"
+
+    def perform_create(self, serializer):
+        super().perform_create(serializer)
+        st = serializer.instance
+        log_action(self.request, 'STOCK_MODIFIE', cible=self._desc(st), detail=f"Création du stock : {st.quantite}")
+
+    def perform_update(self, serializer):
+        avant = serializer.instance.quantite
+        super().perform_update(serializer)
+        st = serializer.instance
+        log_action(self.request, 'STOCK_MODIFIE', cible=self._desc(st), detail=f"Quantité : {avant} → {st.quantite}")
 
     def _get_user_brigade(self, user):
         if user.brigade:
@@ -197,18 +234,22 @@ class MouvementMaterielViewSet(viewsets.ModelViewSet):
         # pas stockée séparément — cf. ServiceStock.jsx / ServiceDashboard.jsx.
 
     # ─── RETOUR : referme automatiquement l'EMPRUNT ouvert correspondant ───
-    def _close_matching_emprunt(self, retour):
-        emprunt = (
+    @staticmethod
+    def _find_matching_emprunt(materiel_id, agent_id):
+        return (
             MouvementMateriel.objects
             .filter(
                 type='EMPRUNT',
-                materiel_id=retour.materiel_id,
-                agent_concerner_id=retour.agent_concerner_id,
+                materiel_id=materiel_id,
+                agent_concerner_id=agent_id,
                 statut__in=['EN_COURS', 'EN_RETARD'],
             )
             .order_by('-date_mouvement')
             .first()
         )
+
+    def _close_matching_emprunt(self, retour):
+        emprunt = self._find_matching_emprunt(retour.materiel_id, retour.agent_concerner_id)
         if emprunt:
             emprunt.statut = 'RETOURNE'
             emprunt.date_retour_effective = retour.date_mouvement
@@ -225,7 +266,8 @@ class MouvementMaterielViewSet(viewsets.ModelViewSet):
 
         # Un Chef de Brigade ne peut enregistrer un mouvement que pour sa propre brigade.
         # Un Chef de Section peut choisir n'importe quelle brigade de sa section,
-        # mais pas en dehors.
+        # mais pas en dehors. Un GL/CN ne peut que DEMANDER un emprunt pour lui-même,
+        # dans sa propre brigade, en attente de validation par son Chef de Brigade.
         if user.role == 'CHEF_BRIGADE' and not user.is_superuser:
             user_brigade = self._get_user_brigade(user)
             if not user_brigade:
@@ -246,6 +288,20 @@ class MouvementMaterielViewSet(viewsets.ModelViewSet):
                     {'error': "La brigade choisie doit appartenir à votre section"},
                     status=status.HTTP_403_FORBIDDEN
                 )
+        elif user.role in ['GL', 'CN'] and not user.is_superuser:
+            if data.get('type') != 'EMPRUNT':
+                return Response(
+                    {'error': "Vous ne pouvez que demander un emprunt de matériel"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            if not user.brigade:
+                return Response(
+                    {'error': "Aucune brigade n'est associée à votre compte"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            data['brigade'] = user.brigade
+            data['agent_concerner'] = user.id
+            data['statut'] = 'DEMANDE'  # jamais actif directement : en attente de validation
 
         movement_type = data.get('type')
         if movement_type in ['APPROVISIONNEMENT', 'TRANSFERT', 'REBUT', 'INVENTAIRE'] and not data.get('etat'):
@@ -263,6 +319,22 @@ class MouvementMaterielViewSet(viewsets.ModelViewSet):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+        # Un retour ne peut jamais être daté avant (ou le même jour que) l'emprunt qu'il referme
+        if serializer.validated_data.get('type') == 'RETOUR':
+            vd = serializer.validated_data
+            agent = vd.get('agent_concerner')
+            emprunt = self._find_matching_emprunt(vd['materiel'].id, agent.id if agent else None)
+            if emprunt:
+                d_retour = vd.get('date_mouvement') or timezone.now().date()
+                if hasattr(d_retour, 'date'):
+                    d_retour = d_retour.date()
+                if d_retour <= emprunt.date_mouvement:
+                    return Response(
+                        {'error': f"La date de retour doit être après la date d'emprunt "
+                                  f"({emprunt.date_mouvement.strftime('%d/%m/%Y')})."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
         with transaction.atomic():
             self.perform_create(serializer)
             mouvement = serializer.instance
@@ -270,8 +342,16 @@ class MouvementMaterielViewSet(viewsets.ModelViewSet):
             if mouvement.type == 'RETOUR':
                 self._close_matching_emprunt(mouvement)
 
+        lieu = f"Brigade {mouvement.brigade.nom}" if mouvement.brigade_id else 'Service'
+        log_action(request, 'MOUVEMENT_CREE', cible=mouvement.numero,
+                   detail=f"{mouvement.type} — {mouvement.materiel.nom} × {mouvement.quantite} — {lieu} (statut : {mouvement.statut})")
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def perform_destroy(self, instance):
+        numero, info = instance.numero, f"{instance.type} — {instance.materiel.nom} × {instance.quantite}"
+        super().perform_destroy(instance)
+        log_action(self.request, 'MOUVEMENT_SUPPRIME', cible=numero, detail=info)
 
     # ─── Détection automatique des retards (tâche 46) ───
     # Auto-corrective à chaque liste : pas besoin d'attendre un cron pour que
@@ -284,3 +364,33 @@ class MouvementMaterielViewSet(viewsets.ModelViewSet):
             date_retour_prevue__lt=timezone.now().date(),
         ).update(statut='EN_RETARD')
         return super().list(request, *args, **kwargs)
+
+    # ─── Valider une demande d'emprunt (GL/CN → Chef de Brigade/Section/ADMIN) ───
+    @action(detail=True, methods=['patch'])
+    def valider_demande(self, request, pk=None):
+        mouvement = self.get_object()  # déclenche has_object_permission (périmètre + rôle)
+        if mouvement.statut != 'DEMANDE':
+            return Response(
+                {'error': "Ce mouvement n'est pas une demande en attente"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        mouvement.statut = 'EN_COURS'
+        mouvement.save()
+        log_action(request, 'DEMANDE_VALIDEE', cible=mouvement.numero,
+                   detail=f"{mouvement.materiel.nom} × {mouvement.quantite}")
+        return Response({'status': 'demande validée'})
+
+    # ─── Rejeter une demande d'emprunt ───
+    @action(detail=True, methods=['patch'])
+    def rejeter_demande(self, request, pk=None):
+        mouvement = self.get_object()
+        if mouvement.statut != 'DEMANDE':
+            return Response(
+                {'error': "Ce mouvement n'est pas une demande en attente"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        mouvement.statut = 'REJETEE'
+        mouvement.save()
+        log_action(request, 'DEMANDE_REJETEE', cible=mouvement.numero,
+                   detail=f"{mouvement.materiel.nom} × {mouvement.quantite}")
+        return Response({'status': 'demande rejetée'})

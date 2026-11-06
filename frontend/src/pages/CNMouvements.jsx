@@ -3,6 +3,7 @@ import { useLoaderData, useRouteError } from 'react-router-dom';
 import CNSidebar from '../components/CNSidebar';
 import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
+import MouvementDetailModal, { ConcerneCell, TYPES as TYPES_LABELS, STATUTS as STATUTS_LABELS, ROLES as ROLES_LABELS, fmtDate as fmtDateFR } from '../components/MouvementDetail';
 
 // ─── Cache mémoire ───
 let cnMouvementsCache = null;
@@ -175,9 +176,7 @@ const CNMouvements = () => {
     }
   };
 
-  const handleDetail = (numero) => {
-    alert(`📄 Détail du mouvement : ${numero}`);
-  };
+  const [detailM, setDetailM] = useState(null); // mouvement affiché dans la fenêtre de détail
 
   const brigadeName = user?.brigade?.nom || 'N/A';
 
@@ -315,6 +314,8 @@ const CNMouvements = () => {
           margin-bottom: 16px;
         }
 
+        .cell-sub { font-size: 0.72rem; color: #64748b; margin-top: 2px; }
+        .cell-sub.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.7rem; color: #94a3b8; }
         .table-wrap { overflow-x: auto; }
         table {
           width: 100%;
@@ -600,10 +601,9 @@ const CNMouvements = () => {
                 <table>
                   <thead>
                     <tr>
-                      <th>N°</th>
+                      <th style={{ width: '110px' }}>Date</th>
                       <th>Matériel</th>
                       <th>Type</th>
-                      <th>Date</th>
                       <th>Statut</th>
                       <th>Actions</th>
                     </tr>
@@ -611,7 +611,7 @@ const CNMouvements = () => {
                   <tbody>
                     {filteredMouvements.length === 0 ? (
                       <tr>
-                        <td colSpan="6" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
+                        <td colSpan="5" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8' }}>
                           Aucun mouvement trouvé
                         </td>
                       </tr>
@@ -624,6 +624,8 @@ const CNMouvements = () => {
                         }[m.type] || '';
 
                         const statutClass = {
+                          'DEMANDE': 'yellow',
+                          'REJETEE': 'red',
                           'EN_COURS': 'yellow',
                           'RETOURNE': 'green',
                           'EN_RETARD': 'red',
@@ -633,13 +635,18 @@ const CNMouvements = () => {
 
                         return (
                           <tr key={m.id}>
-                            <td><strong>{m.numero}</strong></td>
-                            <td>{m.materiel_nom || 'N/A'}</td>
-                            <td><span className={`type-badge ${typeClass}`}>{m.type}</span></td>
-                            <td>{new Date(m.date_mouvement).toLocaleDateString('fr-FR')}</td>
-                            <td><span className={`badge ${statutClass}`}>{m.statut}</span></td>
+                            <td>
+                              <strong>{fmtDateFR(m.date_mouvement)}</strong>
+                              <div className="cell-sub mono">{m.numero}</div>
+                            </td>
+                            <td>
+                              <strong>{m.materiel_nom || 'N/A'}</strong>
+                              <div className="cell-sub">× {m.quantite}{m.etat ? ` · ${m.etat}` : ''}</div>
+                            </td>
+                            <td><span className={`type-badge ${typeClass}`}>{TYPES_LABELS[m.type] || m.type}</span></td>
+                            <td><span className={`badge ${statutClass}`}>{STATUTS_LABELS[m.statut] || m.statut}</span></td>
                             <td className="actions-cell">
-                              <button className="btn-sm outline" onClick={() => handleDetail(m.numero)}>📄 Détail</button>
+                              <button className="btn-sm outline" onClick={() => setDetailM(m)}>📄 Détail</button>
                             </td>
                           </tr>
                         );
@@ -652,6 +659,7 @@ const CNMouvements = () => {
           </main>
         </div>
       </div>
+      <MouvementDetailModal mouvement={detailM} onClose={() => setDetailM(null)} />
     </>
   );
 };

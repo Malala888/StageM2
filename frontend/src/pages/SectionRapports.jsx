@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useLoaderData, useRouteError } from 'react-router-dom';
 import SectionSidebar from '../components/SectionSidebar';
 import api from '../api/axios';
+import RapportModal, { buildReport } from '../components/RapportModal';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
 // ─── Cache mémoire ───
@@ -197,75 +198,27 @@ const SectionRapports = () => {
   const stockTotalF = stockFiltre.reduce((acc, s) => acc + s.quantite, 0);
 
   // ─── Handlers ───
+  const [report, setReport] = useState(null);
+
+  const openReport = () => {
+    const periodeLabel = { mois: 'Ce mois', trimestre: 'Ce trimestre', annee: 'Cette année' }[periode];
+    const filtres = [];
+    if (periodeLabel) filtres.push('Période : ' + periodeLabel);
+    if (brigade) filtres.push('Brigade : ' + (brigades.find(b => b.id === parseInt(brigade))?.nom || ''));
+    setReport(buildReport({
+      mouvements: mouvementsFiltres,
+      stock: stockFiltre,
+      filtres,
+      titre: "Rapport d'activité — Section",
+    }));
+  };
+
   const handleGenerer = (e) => {
-    e.preventDefault();
-    // Les cartes ci-dessous se recalculent déjà en direct à chaque changement de filtre.
-    const brigadeLabel = brigade ? (brigades.find(b => b.id === parseInt(brigade))?.nom || 'Brigade') : 'Toutes les brigades';
-    const periodeLabel = { mois: 'Ce mois', trimestre: 'Ce trimestre', annee: 'Cette année' }[periode] || 'Toutes périodes';
-    alert(`📊 Rapport mis à jour\nPériode : ${periodeLabel}\nBrigade : ${brigadeLabel}`);
+    if (e && e.preventDefault) e.preventDefault();
+    openReport();
   };
 
-  const handleExportPDF = () => {
-    const dateStr = new Date().toLocaleDateString('fr-FR');
-    const brigadeLabel = brigade ? (brigades.find(b => b.id === parseInt(brigade))?.nom || 'Brigade') : 'Toutes les brigades';
-    const periodeLabel = { mois: 'Ce mois', trimestre: 'Ce trimestre', annee: 'Cette année' }[periode] || 'Toutes périodes';
-
-    const html = `
-      <html>
-        <head>
-          <title>Rapport Section - ${dateStr}</title>
-          <style>
-            body { font-family: Arial, sans-serif; padding: 30px; color: #0f172a; }
-            h1 { font-size: 20px; border-bottom: 2px solid #2563eb; padding-bottom: 8px; }
-            h2 { font-size: 15px; margin-top: 24px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-            th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
-            th { background: #f1f5f9; }
-            .meta { color: #64748b; font-size: 12px; margin-bottom: 16px; }
-          </style>
-        </head>
-        <body>
-          <h1>Rapport - Section</h1>
-          <div class="meta">Généré le ${dateStr} — Période : ${periodeLabel} — Brigade : ${brigadeLabel}</div>
-
-          <h2>Indicateurs clés</h2>
-          <table>
-            <tr><th>Mouvements</th><td>${totalMouvementsF}</td></tr>
-            <tr><th>Emprunts en cours</th><td>${empruntsEnCoursF}</td></tr>
-            <tr><th>Retards</th><td>${retardsF}</td></tr>
-            <tr><th>Matériels abîmés</th><td>${materielsAbimesF}</td></tr>
-            <tr><th>Stock total</th><td>${stockTotalF}</td></tr>
-          </table>
-
-          <h2>Mouvements par brigade</h2>
-          <table>
-            <tr><th>Brigade</th><th>Mouvements</th></tr>
-            ${statsParBrigadeF.map(b => `<tr><td>${b.nom}</td><td>${b.count}</td></tr>`).join('')}
-          </table>
-
-          <h2>Top matériels empruntés</h2>
-          <table>
-            <tr><th>Matériel</th><th>Emprunts</th></tr>
-            ${topMaterielsF.map(m => `<tr><td>${m.nom}</td><td>${m.qte}</td></tr>`).join('')}
-          </table>
-        </body>
-      </html>
-    `;
-
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      alert('❌ Le navigateur a bloqué la fenêtre d\'impression. Autorisez les pop-ups pour ce site.');
-      return;
-    }
-    printWindow.document.write(html);
-    printWindow.document.close();
-    printWindow.focus();
-    setTimeout(() => printWindow.print(), 300);
-  };
-
-  const handleCardClick = (titre, detail) => {
-    alert(`📄 ${titre}\n${detail || ''}`);
-  };
+  const handleCardClick = () => openReport();
 
   // ─── Rendu ───
   return (
@@ -524,13 +477,6 @@ const SectionRapports = () => {
               <button className="btn-sm primary" style={{ padding: '8px 20px' }} onClick={handleGenerer}>
                 Générer
               </button>
-              <button
-                className="btn-sm success"
-                style={{ padding: '8px 20px', marginLeft: 'auto' }}
-                onClick={handleExportPDF}
-              >
-                📥 Exporter PDF
-              </button>
             </div>
 
             {/* ─── Cartes de rapports ─── */}
@@ -593,6 +539,7 @@ const SectionRapports = () => {
           </main>
         </div>
       </div>
+      {report && <RapportModal report={report} user={user} onClose={() => setReport(null)} />}
     </>
   );
 };

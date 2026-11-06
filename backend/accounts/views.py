@@ -8,6 +8,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from .serializers import UtilisateurSerializer
 from personnel.models import Brigade
+from journal.utils import log_action
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
@@ -40,6 +41,7 @@ class IsSelfOrHierarchyOrAdmin(permissions.BasePermission):
 # ============================================================
 # 1. Custom JWT Serializer pour bloquer EN_ATTENTE / REJETE
 # ============================================================
+
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         # super().validate() effectue déjà l'authenticate() en interne
@@ -57,6 +59,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 "Votre compte a été rejeté. Contactez votre supérieur."
             )
 
+        log_action(self.context.get('request'), 'CONNEXION', cible=str(self.user), detail='Connexion réussie', user=self.user)
         return data
 
 
@@ -122,8 +125,42 @@ class UtilisateurViewSet(viewsets.ModelViewSet):
             print("❌ Erreurs de validation :", serializer.errors)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         self.perform_create(serializer)
+        nouveau = serializer.instance
+        log_action(request, 'INSCRIPTION', cible=self._nom(nouveau),
+                   detail=f"Demande d'inscription ({nouveau.role}) en attente de validation", user=nouveau)
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    # ─── Modification : uniquement son propre profil ───
+    # Un supérieur peut SUPPRIMER le compte de son subordonné direct ou changer son
+    # statut (actif / suspendu / archivé), mais pas modifier ses informations
+    # personnelles (nom, prénom, email, rôle, section, brigade...).
+    def update(self, request, *args, **kwargs):
+        target = self.get_object()
+        if target.id != request.user.id and not request.user.is_superuser:
+            champs = set(request.data.keys())
+            if not champs or not champs.issubset({'statut'}):
+                return Response(
+                    {'error': "Vous ne pouvez pas modifier les informations d'un autre compte. Vous pouvez uniquement changer son statut ou le supprimer."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        ancien_statut = target.statut
+        reponse = super().update(request, *args, **kwargs)
+        if 200 <= reponse.status_code < 300:
+            target.refresh_from_db()
+            if target.statut != ancien_statut:
+                log_action(request, 'STATUT_COMPTE', cible=self._nom(target),
+                           detail=f"Statut : {ancien_statut} → {target.statut}")
+        return reponse
+
+    def perform_destroy(self, instance):
+        nom, role = self._nom(instance), instance.role
+        instance.delete()
+        log_action(self.request, 'SUPPRESSION_COMPTE', cible=nom, detail=f"Compte {role} supprimé")
+
+    @staticmethod
+    def _nom(u):
+        return f"{getattr(u, 'prenom', '') or ''} {getattr(u, 'nom', '') or ''}".strip() or str(u)
 
     # ─── Brigade "effective" d'un chef, même si le FK inverse n'a pas été renseigné ───
     def _get_user_brigade(self, user):
@@ -171,6 +208,7 @@ class UtilisateurViewSet(viewsets.ModelViewSet):
         target.statut = 'ACTIF'
         target.date_validation = timezone.now()
         target.save()
+        log_action(request, 'VALIDATION_COMPTE', cible=self._nom(target), detail=f"Compte {target.role} validé")
         return Response({'status': 'utilisateur validé'})
 
     # ─── Rejeter un compte ───
@@ -184,6 +222,7 @@ class UtilisateurViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Vous n\'avez pas la permission de rejeter cet utilisateur'}, status=status.HTTP_403_FORBIDDEN)
         target.statut = 'REJETE'
         target.save()
+        log_action(request, 'REJET_COMPTE', cible=self._nom(target), detail=f"Compte {target.role} rejeté")
         return Response({'status': 'utilisateur rejeté'})
 
     # ─── Changer le mot de passe ───
@@ -204,6 +243,7 @@ class UtilisateurViewSet(viewsets.ModelViewSet):
             )
         user.set_password(new_password)
         user.save()
+        log_action(request, 'MDP_CHANGE', cible=self._nom(user), detail='Mot de passe modifié par son propriétaire')
         return Response({'status': 'Mot de passe mis à jour avec succès'})
 
 

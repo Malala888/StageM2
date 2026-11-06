@@ -31,6 +31,7 @@ INSTALLED_APPS = [
     'accounts',
     'personnel',
     'materiaux',
+    'journal',
 ]
 
 MIDDLEWARE = [
@@ -91,6 +92,15 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+# Hachage des mots de passe : PBKDF2 allégé (100 000 itérations) -> login rapide.
+# Les anciens mots de passe (PBKDF2 lourd ou Scrypt) restent valides et sont
+# convertis automatiquement à la prochaine connexion.
+PASSWORD_HASHERS = [
+    'accounts.hashers.FastPBKDF2PasswordHasher',
+    'django.contrib.auth.hashers.ScryptPasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
+]
+
 # Internationalization
 LANGUAGE_CODE = 'fr-fr'
 TIME_ZONE = 'Indian/Antananarivo'
@@ -128,3 +138,7 @@ SIMPLE_JWT = {
 # CORS settings (development only)
 CORS_ALLOW_ALL_ORIGINS = True  # Disable in production
 # CORS_ALLOWED_ORIGINS = ['http://localhost:5173', 'http://localhost:3000']
+
+# Connexion avec Google : coller ici l'ID client (Google Cloud Console), ou le définir en variable d'environnement.
+import os
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useLoaderData, useRouteError } from 'react-router-dom';
 import BrigadeSidebar from '../components/BrigadeSidebar';
 import api from '../api/axios';
+import RapportModal, { buildReport } from '../components/RapportModal';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
 // ─── Cache mémoire ───
@@ -113,58 +114,26 @@ const BrigadeRapports = () => {
   const materielsAbimes = stock.filter(s => s.etat === 'MAUVAIS' || s.etat === 'HORS_SERVICE').reduce((acc, s) => acc + s.quantite, 0);
   const stockTotal = stock.reduce((acc, s) => acc + s.quantite, 0);
 
+  const [report, setReport] = useState(null);
+
+  const openReport = () => {
+    const periodeLabel = { mois: 'Ce mois', trimestre: 'Ce trimestre', annee: 'Cette année' }[periode];
+    const filtres = [];
+    if (periodeLabel) filtres.push('Période : ' + periodeLabel);
+    setReport(buildReport({
+      mouvements: mouvementsFiltres,
+      stock: stock,
+      filtres,
+      titre: "Rapport d'activité — Brigade",
+    }));
+  };
+
   const handleGenerer = (e) => {
-    e.preventDefault();
-    const periodeLabel = { mois: 'Ce mois', trimestre: 'Ce trimestre', annee: 'Cette année' }[periode] || 'Toutes périodes';
-    alert(`📊 Rapport mis à jour\nPériode : ${periodeLabel}`);
+    if (e && e.preventDefault) e.preventDefault();
+    openReport();
   };
 
-  const handleExportPDF = () => {
-    const dateStr = new Date().toLocaleDateString('fr-FR');
-    const periodeLabel = { mois: 'Ce mois', trimestre: 'Ce trimestre', annee: 'Cette année' }[periode] || 'Toutes périodes';
-
-    const html = `
-      <html>
-        <head>
-          <title>Rapport Brigade - ${dateStr}</title>
-          <style>
-            body { font-family: Arial, sans-serif; padding: 30px; color: #0f172a; }
-            h1 { font-size: 20px; border-bottom: 2px solid #2563eb; padding-bottom: 8px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-            th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
-            th { background: #f1f5f9; }
-            .meta { color: #64748b; font-size: 12px; margin-bottom: 16px; }
-          </style>
-        </head>
-        <body>
-          <h1>Rapport - Brigade ${brigadeName}</h1>
-          <div class="meta">Généré le ${dateStr} — Période : ${periodeLabel}</div>
-          <table>
-            <tr><th>Mouvements</th><td>${totalMouvements}</td></tr>
-            <tr><th>Emprunts en cours</th><td>${empruntsEnCours}</td></tr>
-            <tr><th>Retards</th><td>${retards}</td></tr>
-            <tr><th>Matériels abîmés</th><td>${materielsAbimes}</td></tr>
-            <tr><th>Stock total</th><td>${stockTotal}</td></tr>
-            <tr><th>Agents actifs</th><td>${agentsActifs}</td></tr>
-          </table>
-        </body>
-      </html>
-    `;
-
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      alert('❌ Le navigateur a bloqué la fenêtre d\'impression. Autorisez les pop-ups pour ce site.');
-      return;
-    }
-    printWindow.document.write(html);
-    printWindow.document.close();
-    printWindow.focus();
-    setTimeout(() => printWindow.print(), 300);
-  };
-
-  const handleCardClick = (titre, detail) => {
-    alert(`📄 ${titre}\n${detail || ''}`);
-  };
+  const handleCardClick = () => openReport();
 
   return (
     <>
@@ -411,13 +380,6 @@ const BrigadeRapports = () => {
               <button className="btn-sm primary" style={{ padding: '8px 20px' }} onClick={handleGenerer}>
                 Générer
               </button>
-              <button
-                className="btn-sm success"
-                style={{ padding: '8px 20px', marginLeft: 'auto' }}
-                onClick={handleExportPDF}
-              >
-                📥 Exporter PDF
-              </button>
             </div>
 
             {/* ─── Cartes de rapports ─── */}
@@ -462,6 +424,7 @@ const BrigadeRapports = () => {
           </main>
         </div>
       </div>
+      {report && <RapportModal report={report} user={user} onClose={() => setReport(null)} />}
     </>
   );
 };

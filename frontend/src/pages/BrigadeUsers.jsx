@@ -160,7 +160,7 @@ const BrigadeUsers = () => {
   };
 
   const handleDelete = async (id, nom) => {
-    if (!confirm(`Supprimer "${nom}" ?`)) return;
+    if (!(await window.appConfirm(`Supprimer "${nom}" ?`))) return;
     try {
       await api.delete(`/accounts/users/${id}/`);
       alert('✅ Utilisateur supprimé');
@@ -185,7 +185,7 @@ const BrigadeUsers = () => {
   };
 
   const handleReject = async (id, nom) => {
-    if (!confirm(`Rejeter ${nom} ?`)) return;
+    if (!(await window.appConfirm(`Rejeter ${nom} ?`))) return;
     try {
       await api.patch(`/accounts/users/${id}/rejeter/`);
       alert(`❌ ${nom} rejeté`);

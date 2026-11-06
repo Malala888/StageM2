@@ -199,7 +199,7 @@ const SectionMateriels = () => {
   };
 
   const handleDelete = async (id, nom) => {
-    if (!confirm(`Supprimer "${nom}" ?`)) return;
+    if (!(await window.appConfirm(`Supprimer "${nom}" ?`))) return;
 
     try {
       await api.delete(`/materiaux/materiels/${id}/`);

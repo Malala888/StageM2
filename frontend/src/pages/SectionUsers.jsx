@@ -182,7 +182,7 @@ const SectionUsers = () => {
   };
 
   const handleDelete = async (id, nom) => {
-    if (!confirm(`Supprimer "${nom}" ?`)) return;
+    if (!(await window.appConfirm(`Supprimer "${nom}" ?`))) return;
     try {
       await api.delete(`/accounts/users/${id}/`);
       setUsersList(prev => prev.filter(u => u.id !== id));
@@ -208,7 +208,7 @@ const SectionUsers = () => {
   };
 
   const handleReject = async (id, nom) => {
-    if (!confirm(`Rejeter ${nom} ?`)) return;
+    if (!(await window.appConfirm(`Rejeter ${nom} ?`))) return;
     try {
       await api.patch(`/accounts/users/${id}/rejeter/`);
       setUsersList(prev => prev.map(u => u.id === id ? { ...u, statut: 'REJETE' } : u));

@@ -3,6 +3,7 @@ import { useLoaderData, useRouteError } from 'react-router-dom';
 import SectionSidebar from '../components/SectionSidebar';
 import api from '../api/axios';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
+import MouvementDetailModal, { exportMouvementsCsv, ConcerneCell, TYPES as TYPES_LABELS, STATUTS as STATUTS_LABELS, ROLES as ROLES_LABELS, fmtDate as fmtDateFR } from '../components/MouvementDetail';
 
 // ─── Cache mémoire ───
 let sectionMouvementsCache = null;
@@ -93,6 +94,13 @@ const SectionMouvements = () => {
   const [brigadeDestination, setBrigadeDestination] = useState('');
   const [etatMvt, setEtatMvt] = useState('NEUF');
   const [dateRetourPrevue, setDateRetourPrevue] = useState('');
+  // La date de retour doit toujours être strictement après la date d'emprunt
+  const lendemain = (d) => {
+    if (!d) return '';
+    const x = new Date(d);
+    x.setDate(x.getDate() + 1);
+    return x.toISOString().split('T')[0];
+  };
   const [commentaire, setCommentaire] = useState('');
 
   // Types de mouvement qui nécessitent un état (pour savoir quelle ligne de Stock mettre à jour)
@@ -188,6 +196,20 @@ const SectionMouvements = () => {
       setSubmitting(false);
       return;
     }
+    if (type === 'EMPRUNT' && dateRetourPrevue <= date) {
+      setSubmitError("La date de retour doit être après la date d'emprunt (pas le même jour ni avant).");
+      setSubmitting(false);
+      return;
+    }
+    if (type === 'RETOUR') {
+      const ouvert = mouvements.find(m => m.type === 'EMPRUNT' && ['EN_COURS', 'EN_RETARD'].includes(m.statut)
+        && String(m.materiel) === String(materiel) && String(m.agent_concerner || '') === String(agent || ''));
+      if (ouvert && date <= ouvert.date_mouvement) {
+        setSubmitError(`La date de retour doit être après la date d'emprunt (${new Date(ouvert.date_mouvement).toLocaleDateString('fr-FR')}).`);
+        setSubmitting(false);
+        return;
+      }
+    }
 
     const payload = {
       type,
@@ -238,9 +260,7 @@ const SectionMouvements = () => {
     }
   };
 
-  const handleDetail = (numero) => {
-    alert(`📄 Détail du mouvement : ${numero}`);
-  };
+  const [detailM, setDetailM] = useState(null); // mouvement affiché dans la fenêtre de détail
 
   // ─── Rendu ───
   return (
@@ -617,7 +637,7 @@ const SectionMouvements = () => {
                       id="date"
                       ref={dateInputRef}
                       value={date}
-                      onChange={(e) => setDate(e.target.value)}
+                      onChange={(e) => { setDate(e.target.value); if (dateRetourPrevue && dateRetourPrevue <= e.target.value) setDateRetourPrevue(''); }}
                       required
                     />
                   </div>
@@ -690,6 +710,7 @@ const SectionMouvements = () => {
                           type="date"
                           id="date-retour"
                           value={dateRetourPrevue}
+                          min={lendemain(date)}
                           onChange={(e) => setDateRetourPrevue(e.target.value)}
                           required
                         />
@@ -760,16 +781,24 @@ const SectionMouvements = () => {
                 >
                   Réinitialiser
                 </button>
+                <button
+                  className="btn-sm success"
+                  style={{ padding: '8px 20px', marginLeft: 'auto' }}
+                  onClick={() => exportMouvementsCsv(filteredMouvements)}
+                  disabled={filteredMouvements.length === 0}
+                >
+                  📥 Exporter (Excel)
+                </button>
               </div>
               <div className="table-wrap">
                 <table>
                   <thead>
                     <tr>
-                      <th>N°</th>
+                      <th style={{ width: '110px' }}>Date</th>
                       <th>Matériel</th>
                       <th>Type</th>
-                      <th>Agent</th>
-                      <th>Date</th>
+                      <th>Effectué par</th>
+                      <th>Concerné</th>
                       <th>Statut</th>
                       <th>Actions</th>
                     </tr>
@@ -793,6 +822,8 @@ const SectionMouvements = () => {
                         }[m.type] || '';
 
                         const statutClass = {
+                          'DEMANDE': 'yellow',
+                          'REJETEE': 'red',
                           'EN_COURS': 'yellow',
                           'RETOURNE': 'green',
                           'EN_RETARD': 'red',
@@ -802,14 +833,23 @@ const SectionMouvements = () => {
 
                         return (
                           <tr key={m.id}>
-                            <td><strong>{m.numero}</strong></td>
-                            <td>{m.materiel_nom || 'N/A'}</td>
-                            <td><span className={`type-badge ${typeClass}`}>{m.type}</span></td>
-                            <td>{m.agent_concerner_nom || '—'}</td>
-                            <td>{new Date(m.date_mouvement).toLocaleDateString('fr-FR')}</td>
-                            <td><span className={`badge ${statutClass}`}>{m.statut}</span></td>
+                            <td>
+                              <strong>{fmtDateFR(m.date_mouvement)}</strong>
+                              <div className="cell-sub mono">{m.numero}</div>
+                            </td>
+                            <td>
+                              <strong>{m.materiel_nom || 'N/A'}</strong>
+                              <div className="cell-sub">× {m.quantite}{m.etat ? ` · ${m.etat}` : ''}</div>
+                            </td>
+                            <td><span className={`type-badge ${typeClass}`}>{TYPES_LABELS[m.type] || m.type}</span></td>
+                            <td>
+                              {m.createur_nom || '—'}
+                              <div className="cell-sub">{ROLES_LABELS[m.createur_role] || ''}</div>
+                            </td>
+                            <td><ConcerneCell m={m} /></td>
+                            <td><span className={`badge ${statutClass}`}>{STATUTS_LABELS[m.statut] || m.statut}</span></td>
                             <td className="actions-cell">
-                              <button className="btn-sm outline" onClick={() => handleDetail(m.numero)}>📄 Détail</button>
+                              <button className="btn-sm outline" onClick={() => setDetailM(m)}>📄 Détail</button>
                             </td>
                           </tr>
                         );
@@ -823,6 +863,7 @@ const SectionMouvements = () => {
           </main>
         </div>
       </div>
+      <MouvementDetailModal mouvement={detailM} onClose={() => setDetailM(null)} />
     </>
   );
 };

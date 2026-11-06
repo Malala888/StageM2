@@ -585,7 +585,7 @@ const BrigadeDashboard = () => {
                                   <button
                                     className="btn-sm danger"
                                     onClick={async () => {
-                                      if (!confirm(`Rejeter ${targetUser.nom} ${targetUser.prenom} ?`)) return;
+                                      if (!(await window.appConfirm(`Rejeter ${targetUser.nom} ${targetUser.prenom} ?`))) return;
                                       try {
                                         await api.patch(`/accounts/users/${targetUser.id}/rejeter/`);
                                         alert(`❌ ${targetUser.nom} ${targetUser.prenom} rejeté`);

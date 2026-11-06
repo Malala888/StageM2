@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useLoaderData, useRouteError } from 'react-router-dom';
 import GLSidebar from '../components/GLSidebar';
 import api from '../api/axios';
+import RapportModal, { buildReport } from '../components/RapportModal';
 import backgroundImage from '../assets/Fianarantsoa_03.jpg';
 
 // ─── Cache mémoire ───
@@ -75,6 +76,7 @@ async function fetchGLRapportsData() {
     assignes,
     section: section,
     brigade: brigade,
+    mouvements: mesMouvements,
   };
 
   glRapportsCache = result;
@@ -119,69 +121,46 @@ const GLRapports = () => {
     assignes,
     brigade,
     section,
+    mouvements,
   } = useLoaderData();
 
   const [periode, setPeriode] = useState('');
+  const getDateLimite = (p) => {
+    const n = new Date();
+    if (p === 'mois') return new Date(n.getFullYear(), n.getMonth(), 1);
+    if (p === 'trimestre') return new Date(n.getFullYear(), n.getMonth() - 2, 1);
+    if (p === 'annee') return new Date(n.getFullYear(), 0, 1);
+    return null;
+  };
+  const mouvementsFiltres = (mouvements || []).filter(m => {
+    const l = getDateLimite(periode);
+    return !l || new Date(m.date_mouvement) >= l;
+  });
 
   const brigadeName = brigade?.nom || 'N/A';
   const sectionName = section?.nom || 'N/A';
 
+  const [report, setReport] = useState(null);
+
+  const openReport = () => {
+    const periodeLabel = { mois: 'Ce mois', trimestre: 'Ce trimestre', annee: 'Cette année' }[periode];
+    const filtres = [];
+    if (periodeLabel) filtres.push('Période : ' + periodeLabel);
+    filtres.push('Brigade ' + brigadeName, 'Section ' + sectionName);
+    setReport(buildReport({
+      mouvements: mouvementsFiltres,
+      stock: null,
+      filtres,
+      titre: "Mon rapport d'activité",
+    }));
+  };
+
   const handleGenerer = (e) => {
-    if (e) e.preventDefault();
-    alert('📊 Rapport à jour — il reflète vos données personnelles actuelles.');
+    if (e && e.preventDefault) e.preventDefault();
+    openReport();
   };
 
-  const handleExportPDF = () => {
-    const dateStr = new Date().toLocaleDateString('fr-FR');
-    const html = `
-      <html>
-        <head>
-          <title>Mon rapport - ${dateStr}</title>
-          <style>
-            body { font-family: Arial, sans-serif; padding: 30px; color: #0f172a; }
-            h1 { font-size: 20px; border-bottom: 2px solid #2563eb; padding-bottom: 8px; }
-            h2 { font-size: 15px; margin-top: 24px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-            th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #e2e8f0; font-size: 13px; }
-            th { background: #f1f5f9; }
-            .meta { color: #64748b; font-size: 12px; margin-bottom: 16px; }
-          </style>
-        </head>
-        <body>
-          <h1>Mon rapport d'activité</h1>
-          <div class="meta">Généré le ${dateStr} — Brigade ${brigadeName} — Section ${sectionName}</div>
-          <table>
-            <tr><th>Total emprunts</th><td>${totalEmprunts}</td></tr>
-            <tr><th>Total retours</th><td>${totalRetours}</td></tr>
-            <tr><th>Emprunts en cours</th><td>${empruntsEnCours}</td></tr>
-            <tr><th>Demandes en attente</th><td>${demandesEnAttente}</td></tr>
-            <tr><th>Retards</th><td>${retards}</td></tr>
-            <tr><th>Taux de retour</th><td>${tauxRetour}%</td></tr>
-            <tr><th>Matériels détenus</th><td>${nbMaterielsAssignes}</td></tr>
-          </table>
-          <h2>Matériels actuellement détenus</h2>
-          <table>
-            <tr><th>Matériel</th></tr>
-            ${assignes.length ? assignes.map(n => `<tr><td>${n}</td></tr>`).join('') : '<tr><td>Aucun</td></tr>'}
-          </table>
-        </body>
-      </html>
-    `;
-
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      alert('❌ Le navigateur a bloqué la fenêtre d\'impression. Autorisez les pop-ups pour ce site.');
-      return;
-    }
-    printWindow.document.write(html);
-    printWindow.document.close();
-    printWindow.focus();
-    setTimeout(() => printWindow.print(), 300);
-  };
-
-  const handleCardClick = (titre, detail) => {
-    alert(`📄 ${titre}\n${detail || ''}`);
-  };
+  const handleCardClick = () => openReport();
 
   return (
     <>
@@ -430,13 +409,6 @@ const GLRapports = () => {
               <button className="btn-sm primary" style={{ padding: '8px 20px' }} onClick={handleGenerer}>
                 Générer
               </button>
-              <button
-                className="btn-sm success"
-                style={{ padding: '8px 20px', marginLeft: 'auto' }}
-                onClick={handleExportPDF}
-              >
-                📥 Exporter PDF
-              </button>
             </div>
 
             {/* ─── Cartes de rapports ─── */}
@@ -509,6 +481,7 @@ const GLRapports = () => {
           </main>
         </div>
       </div>
+      {report && <RapportModal report={report} user={user} onClose={() => setReport(null)} />}
     </>
   );
 };
